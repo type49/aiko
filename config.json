@@ -1,0 +1,24 @@
+{
+    "audio": {
+        "device_id": 1,
+        "samplerate": 16000,
+        "match_threshold": 80
+    },
+    "trigger": {
+        "names": [
+            "айко",
+            "айка",
+            "хайко",
+            "лайко",
+            "аико",
+            "ойко",
+            "найко",
+            "ай ко"
+        ],
+        "active_window": 5.0
+    },
+    "debug": {
+        "log_commands": true,
+        "matcher_debug": true
+    }
+}

@@ -4,13 +4,14 @@ import threading
 import importlib.util
 from pathlib import Path
 from vosk import Model, KaldiRecognizer
-from fuzzywuzzy import fuzz
 
 from interfaces import AikoCommand
 from utils.db_manager import db
 from utils.logger import logger
 from utils.audio_handler import AudioHandler
 from utils.matcher import CommandMatcher
+from utils.config_manager import aiko_cfg
+
 
 class AikoContext:
     """Объект состояния системы. Передается между Ядром, GUI и Плагинами."""
@@ -23,6 +24,11 @@ class AikoContext:
         self.device_id = 1
         self.model_path = Path("models/small/vosk-model-small-ru-0.22")
         self.commands = []
+
+        self.device_id = aiko_cfg.get("audio.device_id", 1)
+        self.active_window = aiko_cfg.get("trigger.active_window", 5.0)
+        self.log_commands = aiko_cfg.get("debug.log_commands", True)
+
         self.state = "idle"
 
         self.log_commands = True
@@ -37,7 +43,6 @@ class AikoCore:
         self.ctx = ctx or AikoContext()
         logger.info("Инициализация AikoCore...")
 
-        # 1. Проверка модели
         if not self.ctx.model_path.exists():
             logger.critical(f"Модель не найдена: {self.ctx.model_path}")
             raise FileNotFoundError("Vosk model missing")
@@ -45,14 +50,11 @@ class AikoCore:
         self.model = Model(str(self.ctx.model_path))
         self.rec = KaldiRecognizer(self.model, 16000)
 
-        # 2. Инициализация аудио-обработчика
         self.audio = AudioHandler(device_id=self.ctx.device_id)
         self.stop_event = threading.Event()
 
-        # 3. Загрузка способностей
         self._load_plugins()
 
-        # 4. Запуск фоновых процессов
         self.scheduler_active = True
         threading.Thread(target=self._scheduler_loop, daemon=True, name="Scheduler").start()
 
@@ -94,18 +96,12 @@ class AikoCore:
 
     def _check_trigger(self, text):
         """Проверка активационного имени 'Айко'"""
-        triggers = ["айко", "айка", "хайко", "лайко", "аико", "ойко", "найко", "ай ко"]
-
-        is_trig, cmd_text = CommandMatcher.check_trigger(text, triggers)
-
-        if is_trig:
-            logger.info(f"Триггер опознан! Остаток фразы: '{cmd_text}'")
-
-        return is_trig, cmd_text
+        triggers = aiko_cfg.get("trigger.names", ["айко"])
+        threshold = aiko_cfg.get("audio.match_threshold", 80)
+        return CommandMatcher.check_trigger(text, triggers, threshold)
 
     def run(self):
         """Точка входа: запуск захвата аудио и цикла распознавания."""
-        # Запускаем "уши"
         threading.Thread(target=self.audio.listen, args=(self.stop_event,), daemon=True, name="AudioIn").start()
         logger.info("Основной цикл распознавания запущен.")
 
@@ -118,7 +114,6 @@ class AikoCore:
                 self.set_state("idle")
 
             try:
-                # Получаем байты из AudioHandler
                 data = self.audio.audio_q.get(timeout=0.2)
 
                 if self.rec.AcceptWaveform(data):
@@ -150,7 +145,6 @@ class AikoCore:
         """Фоновый планировщик задач и тиков."""
         while self.scheduler_active and self.ctx.is_running:
             try:
-                # 1. Задачи из БД
                 tasks = db.get_pending_tasks()
                 for t_id, t_type, t_payload in tasks:
                     for cmd in self.ctx.commands:

@@ -1,8 +1,9 @@
-import re
 import time
 import pygetwindow as gw
 from interfaces import AikoCommand
 from utils.audio_player import audio_manager
+from utils.matcher import CommandMatcher
+from utils.logger import logger
 
 
 class FocusManager(AikoCommand):
@@ -10,27 +11,62 @@ class FocusManager(AikoCommand):
         self.type = "focus_manager"
         self.is_active = False
         self.last_check_time = 0
-        self.check_interval = 5  # В режиме фокуса проверяем чаще (раз в 15 сек)
-        self.distractors = ["youtube", "vkontakte", "telegram", "netflix", "twitch", "instagram", "facebook"]
-        self.browsers = ["chrome", "firefox", "edge", "opera", "browser", "yandex"]
+        self.check_interval = 5  # Интервал проверки окон (сек)
+
+        # Список сайтов и приложений для блокировки
+        self.distractors = ["youtube", "vk", "telegram", "netflix", "twitch", "instagram", "facebook", "poker"]
+
+        # Намерения на ВКЛЮЧЕНИЕ
+        self.start_triggers = [
+            "режим концентрации", "включи фокус", "активируй режим фокуса",
+            "режим работы", "пора работать", "запусти концентрацию",
+            "рабочий режим", "фокус включи"
+        ]
+
+        # Намерения на ВЫКЛЮЧЕНИЕ
+        self.stop_triggers = [
+            "выключи режим концентрации", "стоп фокус", "отмени концентрацию",
+            "останови режим фокуса", "хватит следить", "отключи фокус",
+            "завершить работу", "выключи концентрацию", "я закончил работать",
+            "хватит", "стоп", "сто режим", "отмена"
+        ]
 
     def execute(self, text, ctx):
-        text_lower = text.lower()
+        # 1. Считаем скоры для обоих списков через Мэтчер
+        # Порог 70 для стопа (чтобы легче было выключить в шуме)
+        match_stop, score_stop = CommandMatcher.extract(text, self.stop_triggers, threshold=70)
+        # Порог 75 для старта
+        match_start, score_start = CommandMatcher.extract(text, self.start_triggers, threshold=75)
 
-        if "режим концентрации" in text_lower or "режим фокуса" in text_lower:
-            if "выключи" in text_lower or "отмени" in text_lower or "стоп" in text_lower:
-                self.is_active = False
-                ctx.ui_log("Режим концентрации ВЫКЛЮЧЕН. Свобода.", "info")
+        # 2. Сравниваем, какое намерение победило
+        # Если фраза больше похожа на команду ОСТАНОВКИ
+        if score_stop > score_start and match_stop:
+            if not self.is_active:
+                ctx.ui_log("Режим концентрации и так выключен.", "info")
+                return True
+
+            self.is_active = False
+            ctx.ui_log("Режим концентрации ВЫКЛЮЧЕН. Свобода.", "info")
+            logger.info(f"FocusManager: Деактивация через '{match_stop}' ({score_stop}%)")
+            return True
+
+        # 3. Если фраза больше похожа на команду ЗАПУСКА
+        if match_start:
+            if self.is_active:
+                logger.debug("FocusManager: Попытка повторного включения (уже активен).")
                 return True
 
             self.is_active = True
-            ctx.ui_log("РЕЖИМ КОНЦЕНТРАЦИИ АКТИВИРОВАН. Я слежу за тобой.", "cmd")
-            audio_manager.play("assets/sound/alarm.wav", volume=0.3)
+            ctx.ui_log("РЕЖИМ КОНЦЕНТРАЦИИ АКТИВИРОВАН. Я слежу.", "error")
+            # ПРОВЕРЬ ПУТЬ: он должен соответствовать структуре твоего проекта
+            audio_manager.play("assets/sound/system/alarm.wav", volume=0.3)
+            logger.info(f"FocusManager: Активация через '{match_start}' ({score_start}%)")
             return True
+
         return False
 
     def on_tick(self, ctx):
-        """Метод, который ядро будет дергать в каждом цикле"""
+        """Метод вызывается Ядром каждые 5 сек (из scheduler_loop или отдельного тика)"""
         if not self.is_active:
             return
 
@@ -41,20 +77,22 @@ class FocusManager(AikoCommand):
         self.last_check_time = curr_t
         try:
             window = gw.getActiveWindow()
-            if not window: return
+            if not window:
+                return
 
             title = window.title.lower()
 
-            # Проверяем на отвлечения
+            # Поиск нарушителей в заголовке окна
             for d in self.distractors:
                 if d in title:
-                    print(f"[FOCUS]: Нарушение! Обнаружен {d}")
+                    logger.warning(f"FocusManager: Нарушение! Найдено '{d}' в окне '{title}'")
                     self._punish(ctx, d)
                     break
         except Exception as e:
-            print(f"[FOCUS ERROR]: {e}")
+            logger.error(f"FocusManager Tick Error: {e}")
 
     def _punish(self, ctx, site):
-        if hasattr(ctx, 'ui_log'):
-            ctx.ui_log(f"ВЕРНИСЬ К РАБОТЕ! {site.upper()} под запретом.", "error")
-        audio_manager.play("assets/sound/alarm.wav", volume=0.6)
+        """Метод наказания при обнаружении отвлекающих факторов"""
+        ctx.ui_log(f"ВЕРНИСЬ К РАБОТЕ! {site.upper()} под запретом.", "error")
+        # Повышаем громкость для наказания
+        audio_manager.play("assets/sound/system/alarm.wav", volume=0.6)
