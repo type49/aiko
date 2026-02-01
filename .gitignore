@@ -1,0 +1,17 @@
+.venv/
+venv/
+ENV/
+pyvenv.cfg
+
+models/
+
+*.db
+aiko_data.db
+logs/
+
+.idea/
+.vscode/
+
+__pycache__/
+*.py[cod]
+*$py.class
