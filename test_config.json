@@ -1,0 +1,18 @@
+{
+    "bot": {
+        "name": "Айко"
+    },
+    "audio": {
+        "device_index": 0,
+        "samplerate": 16000,
+        "master_volume": 0.7,
+        "match_threshold": 80
+    },
+    "trigger": {
+        "active_window": 5.0
+    },
+    "debug": {
+        "log_commands": true,
+        "matcher_debug": true
+    }
+}
