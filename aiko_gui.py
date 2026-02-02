@@ -4,13 +4,13 @@ from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor
 from PySide6.QtCore import QObject, Qt
 
-# ИМПОРТЫ ИЗ НАШЕЙ ПАПКИ UI
 from ui.signals import AikoSignals
 from ui.notifications import PopupNotification
 from ui.dialogs import ReminderDialog
+from ui.settings import SettingsWindow
 
 from aiko_core import AikoCore, AikoContext
-from utils.logger import logger  # Твой логгер
+from utils.logger import logger
 
 
 class WindowManager:
@@ -56,16 +56,32 @@ class AikoApp(QObject):
     def _init_tray(self):
         self.update_tray_icon("idle")
         menu = QMenu()
+
+        settings_action = menu.addAction("Настройки")
+        settings_action.triggered.connect(self.show_settings)
+
+        menu.addSeparator()
         menu.addAction("Выход", self.quit_app)
+
         self.tray.setContextMenu(menu)
         self.tray.show()
-        logger.debug("GUI: Системный трей готов.")
+        logger.debug("GUI: Системный трей готов. Пункт 'Настройки' добавлен.")
+
+    def show_settings(self):
+        logger.info("GUI: Создание нового экземпляра окна настроек.")
+        self.settings_win = SettingsWindow()
+        self.settings_win.settings_saved.connect(self.on_settings_updated)
+        self.settings_win.show()
+        self.settings_win.activateWindow()
+        self.settings_win.raise_()
+
+    def on_settings_updated(self):
+        self.receive_message("Системные настройки обновлены", "info")
+        if hasattr(self.core, 'restart_audio_capture'):
+            self.core.restart_audio_capture()
 
     def update_tray_icon(self, status):
-        """Логгируем только важные смены состояний, чтобы не спамить в DEBUG"""
-        logger.debug(f"GUI: Обновление иконки трея -> {status}")
         colors = {"idle": "#00FFCC", "active": "#FF0000", "blocked": "#000000", "off": "#555555"}
-
         pixmap = QPixmap(64, 64)
         pixmap.fill(Qt.transparent)
         p = QPainter(pixmap)
@@ -84,13 +100,19 @@ class AikoApp(QObject):
                 self.receive_message(f"Задача зафиксирована на {dt}", "success")
 
     def receive_message(self, text, msg_type):
-        """Фиксация всех всплывающих уведомлений в логе"""
         logger.info(f"HUD: [{msg_type.upper()}] {text}")
         self.popup.add_item(text, msg_type)
 
     def quit_app(self):
+        """Корректное завершение всех процессов"""
         logger.warning("GUI: Запрошено завершение приложения.")
         self.ctx.is_running = False
+
+        # Принудительно сбрасываем буфер логов на диск перед закрытием
+        for handler in logger.handlers:
+            handler.flush()
+            handler.close()
+
         QApplication.quit()
 
 
@@ -98,8 +120,31 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
+    aiko_instance = None
     try:
         aiko_instance = AikoApp()
         sys.exit(app.exec())
+
     except Exception as e:
-        logger.critical(f"GUI: Критическая ошибка при запуске: {e}", exc_info=True)
+        # 1. Фиксируем ошибку
+        logger.critical(f"GUI: КРИТИЧЕСКИЙ ВЫЛЕТ СИСТЕМЫ: {e}", exc_info=True)
+
+        # 2. Делаем диагностический снимок
+        if aiko_instance and hasattr(aiko_instance, 'core'):
+            try:
+                # Поиск плагина по имени класса в списке загруженных команд
+                diag_plugin = next((c for c in aiko_instance.core.ctx.commands
+                                    if c.__class__.__name__ == 'SystemStatusCommand'), None)
+
+                if diag_plugin:
+                    crash_report = diag_plugin.get_report(aiko_instance.ctx)
+                    logger.critical(f"\nСНИМОК СОСТОЯНИЯ ПЕРЕД ПАДЕНИЕМ:\n{crash_report}")
+                else:
+                    logger.warning("Диагностический плагин не найден.")
+            except Exception as diag_err:
+                logger.error(f"Не удалось сформировать отчет: {diag_err}")
+
+        # 3. Гарантируем, что логи дойдут до файла даже при крахе
+        for handler in logger.handlers:
+            handler.flush()
+            handler.close()

@@ -33,10 +33,18 @@ class AudioController:
         if not self._initialized: return
 
         try:
-            # Очищаем путь от точек и слешей в начале, если они есть
+            # Импортируем конфиг здесь, чтобы избежать циклического импорта
+            from utils.config_manager import aiko_cfg
+
+            # Читаем мастер-громкость (0.0 - 1.0)
+            master_vol = aiko_cfg.get("audio.master_volume", 1.0)
+
+            # Финальная громкость = (локальная громкость плагина) * (мастер-громкость)
+            # Если в плагине 0.8, а в мастере 0.5 -> звук будет 0.4
+            final_volume = volume * master_vol
+
             clean_path = relative_path.lstrip("./").lstrip("/")
             full_path = self.base_dir / clean_path
-
             str_path = str(full_path)
 
             if not full_path.exists():
@@ -47,12 +55,16 @@ class AudioController:
                 self._sounds[str_path] = pygame.mixer.Sound(str_path)
 
             sound = self._sounds[str_path]
-            sound.set_volume(volume)
+
+            # Устанавливаем ВЫЧИСЛЕННУЮ громкость
+            sound.set_volume(final_volume)
 
             if channel_id is not None:
                 pygame.mixer.Channel(channel_id).play(sound)
             else:
                 sound.play()
+
+            # print(f"[AUDIO]: Play {relative_path} (Master: {master_vol}, Result: {final_volume})")
 
         except Exception as e:
             print(f"[AUDIO ERROR]: Ошибка воспроизведения {relative_path}: {e}")

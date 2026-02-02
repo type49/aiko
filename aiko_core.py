@@ -95,8 +95,10 @@ class AikoCore:
         return False
 
     def _check_trigger(self, text):
-        """Проверка активационного имени 'Айко'"""
-        triggers = aiko_cfg.get("trigger.names", ["айко"])
+        """Динамическая проверка имени из конфига"""
+        main_name = aiko_cfg.get("bot.name").lower()
+
+        triggers = [main_name]
         threshold = aiko_cfg.get("audio.match_threshold", 80)
         return CommandMatcher.check_trigger(text, triggers, threshold)
 
@@ -136,7 +138,6 @@ class AikoCore:
                                 self.ctx.last_activation_time = 0
 
             except Exception as e:
-                # Если очередь пуста или микрофон заблокирован
                 if self.ctx.mic_active and not self.audio.is_active:
                     self.set_state("blocked")
                 continue
@@ -164,3 +165,15 @@ class AikoCore:
     def add_scheduler_task(self, task_type, payload, exec_at):
         """Метод для внешнего вызова (например, из GUI)"""
         return db.add_task(task_type, payload, exec_at)
+
+    def restart_audio_capture(self):
+        """Синхронизирует микрофон с актуальным конфигом"""
+        new_device_id = aiko_cfg.get("audio.device_index", 1)  # Берем свежий ID из конфига
+        logger.info(f"Core: Перезапуск аудио-захвата. Новый ID: {new_device_id}")
+
+        # Обновляем контекст, чтобы другие модули видели изменения
+        self.ctx.device_id = new_device_id
+
+        # Сигнализируем аудио-хендлеру
+        if self.audio:
+            self.audio.restart(new_device_id)

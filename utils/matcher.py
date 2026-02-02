@@ -30,7 +30,6 @@ class CommandMatcher:
                 max_score = score
                 best_match = variant
 
-        # ЛОГИРОВАНИЕ (Берем настройки из конфига)
         is_debug = aiko_cfg.get("debug.matcher_debug", True)
         if is_debug and max_score > 30:
             mode = "PARTIAL" if partial else "STRICT"

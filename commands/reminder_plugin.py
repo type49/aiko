@@ -74,9 +74,5 @@ class ReminderPlugin(AikoCommand):
     def on_schedule(self, payload, ctx):
         """Сработка таймера из планировщика Ядра"""
         logger.info(f"ReminderPlugin: Исполнение таймера -> {payload}")
-
-        # Вывод в визуальный лог (HUD)
         ctx.ui_log(f"НАПОМИНАНИЕ: {payload}", "cmd")
-
-        # Громкое оповещение
         audio_manager.play("assets/sound/system/alarm.wav", volume=0.8)

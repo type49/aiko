@@ -2,7 +2,9 @@
     "audio": {
         "device_id": 1,
         "samplerate": 16000,
-        "match_threshold": 80
+        "match_threshold": 80,
+        "device_index": 0,
+        "master_volume": 1.0
     },
     "trigger": {
         "names": [
@@ -20,5 +22,8 @@
     "debug": {
         "log_commands": true,
         "matcher_debug": true
+    },
+    "bot": {
+        "name": "Айко"
     }
 }
