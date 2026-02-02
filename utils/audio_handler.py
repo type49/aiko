@@ -5,54 +5,61 @@ from utils.logger import logger
 
 
 class AudioHandler:
-    def __init__(self, device_id=1, samplerate=16000):
+    def __init__(self, device_id=1, samplerate=16000, on_status_change=None):
         self.device_id = device_id
         self.samplerate = samplerate
         self.audio_q = queue.Queue()
-        self.last_audio_time = 0
         self.is_active = False
-        self._need_restart = False  # Флаг для перезапуска
+        self._need_restart = False
+        self.on_status_change = on_status_change
+        self.last_audio_time = 0
 
     def _callback(self, indata, frames, time_info, status):
         if status:
-            logger.warning(f"Статус аудио-потока: {status}")
-        self.last_audio_time = time.time()
-        self.audio_q.put(bytes(indata))
+            if "input overflow" not in str(status).lower():
+                raise sd.CallbackAbort
 
-    def restart(self, new_device_id):
-        """Метод для внешнего сигнала о смене микрофона"""
-        logger.info(f"AudioHandler: Запрос перезапуска на устройство {new_device_id}")
-        self.device_id = new_device_id
-        self._need_restart = True  # Это разорвет внутренний while и пересоберет InputStream
+        self.last_audio_time = time.time()
+        self.audio_q.put(indata.copy().tobytes())
+
+    def _notify(self, new_state, msg):
+        if self.is_active != new_state:
+            self.is_active = new_state
+            if self.on_status_change:
+                self.on_status_change(new_state, msg)
 
     def listen(self, stop_event):
         while not stop_event.is_set():
             self._need_restart = False
-            logger.info(f"Захват аудио инициирован: Dev {self.device_id}")
+            self.last_audio_time = time.time()
 
             try:
-                with sd.RawInputStream(
+                # Обновляем список устройств перед каждой попыткой (важно для Windows)
+                sd.query_devices()
+
+                with sd.InputStream(
                         samplerate=self.samplerate,
-                        blocksize=8000,
                         device=self.device_id,
-                        dtype='int16',
                         channels=1,
-                        callback=self._callback
+                        dtype='int16',
+                        callback=self._callback,
+                        blocksize=4000
                 ):
-                    self.is_active = True
-                    self.last_audio_time = time.time()
+                    self._notify(True, "Микрофон активен")
 
                     while not stop_event.is_set() and not self._need_restart:
-                        if self.is_active and (time.time() - self.last_audio_time > 5.0):
-                            logger.error("Поток аудио прерван (тайм-аут данных)")
-                            break
-                        time.sleep(0.5)  # Уменьшил время сна для отзывчивости
-
-                if self._need_restart:
-                    logger.info("AudioHandler: Поток закрыт для смены устройства.")
-                    continue  # Переходит к началу внешнего цикла с новым ID
+                        # Если данных нет 1.5 сек — устройство захвачено DAW
+                        if time.time() - self.last_audio_time > 1.5:
+                            raise sd.PortAudioError("Микрофон недоступен.")
+                        time.sleep(0.5)
 
             except Exception as e:
-                self.is_active = False
-                logger.warning(f"Ошибка аудио-входа: {e}. Повтор через 5 сек...")
-                time.sleep(5)
+                self._notify(False, f"Ожидание: {e}")
+                logger.warning(f"Микрофон недоступен. Попытка возврата через 10с...")
+
+                # Ждем 10 секунд
+                retry_time = 10
+                while retry_time > 0 and not stop_event.is_set():
+                    if self._need_restart: break
+                    time.sleep(1)
+                    retry_time -= 1

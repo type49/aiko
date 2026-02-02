@@ -1,3 +1,4 @@
+import atexit
 import sys
 import threading
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
@@ -11,7 +12,7 @@ from ui.settings import SettingsWindow
 
 from aiko_core import AikoCore, AikoContext
 from utils.logger import logger
-
+from utils.lifecycle import lifecycle
 
 class WindowManager:
     @staticmethod
@@ -37,10 +38,12 @@ class AikoApp(QObject):
         self.ctx.ui_log = self.signals.display_message.emit
         self.ctx.ui_open_reminder = self.signals.open_reminder.emit
         self.ctx.ui_status = self.update_tray_icon
+        self.ctx.ui_audio_status = self.signals.audio_status_changed.emit
 
         # Подключаем обработчики сигналов в GUI
         self.signals.display_message.connect(self.receive_message)
         self.signals.open_reminder.connect(self._handle_reminder_ui)
+        self.signals.audio_status_changed.connect(self._handle_audio_status_change)
 
         # Инициализация ядра
         self.core = AikoCore(self.ctx)
@@ -67,6 +70,16 @@ class AikoApp(QObject):
         self.tray.show()
         logger.debug("GUI: Системный трей готов. Пункт 'Настройки' добавлен.")
 
+    def _handle_audio_status_change(self, is_ok, message):
+        if is_ok:
+            logger.info("GUI: Микрофон восстановлен.")
+            self.update_tray_icon("idle")
+            self.receive_message("Микрофон подключен", "success")
+        else:
+            logger.warning(f"GUI: Ошибка микрофона: {message}")
+            self.update_tray_icon("blocked")  # та самая черная иконка
+            self.receive_message(f"Микрофон отключен: {message}", "error")
+
     def show_settings(self):
         logger.info("GUI: Создание нового экземпляра окна настроек.")
         self.settings_win = SettingsWindow()
@@ -81,7 +94,7 @@ class AikoApp(QObject):
             self.core.restart_audio_capture()
 
     def update_tray_icon(self, status):
-        colors = {"idle": "#00FFCC", "active": "#FF0000", "blocked": "#000000", "off": "#555555"}
+        colors = {"idle": "#00FFCC", "active": "#FF0000", "blocked": "#000000", "off": "#555555", "error": "#000000",}
         pixmap = QPixmap(64, 64)
         pixmap.fill(Qt.transparent)
         p = QPainter(pixmap)
@@ -120,31 +133,19 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
+    # --- ПРИМЕНЕНИЕ ЛОГИКИ ЛАЙФСАЙКЛА ---
+    lifecycle.check_previous_session() # 1. Проверяем старый файл
+    lifecycle.create_lock()            # 2. Создаем новый
+    atexit.register(lifecycle.cleanup) # 3. Регистрируем авто-удаление
+    # ------------------------------------
+
     aiko_instance = None
     try:
         aiko_instance = AikoApp()
         sys.exit(app.exec())
 
     except Exception as e:
-        # 1. Фиксируем ошибку
         logger.critical(f"GUI: КРИТИЧЕСКИЙ ВЫЛЕТ СИСТЕМЫ: {e}", exc_info=True)
-
-        # 2. Делаем диагностический снимок
-        if aiko_instance and hasattr(aiko_instance, 'core'):
-            try:
-                # Поиск плагина по имени класса в списке загруженных команд
-                diag_plugin = next((c for c in aiko_instance.core.ctx.commands
-                                    if c.__class__.__name__ == 'SystemStatusCommand'), None)
-
-                if diag_plugin:
-                    crash_report = diag_plugin.get_report(aiko_instance.ctx)
-                    logger.critical(f"\nСНИМОК СОСТОЯНИЯ ПЕРЕД ПАДЕНИЕМ:\n{crash_report}")
-                else:
-                    logger.warning("Диагностический плагин не найден.")
-            except Exception as diag_err:
-                logger.error(f"Не удалось сформировать отчет: {diag_err}")
-
-        # 3. Гарантируем, что логи дойдут до файла даже при крахе
-        for handler in logger.handlers:
-            handler.flush()
-            handler.close()
+        # cleanup выполнится либо здесь, либо через atexit
+    finally:
+        lifecycle.cleanup() # Гарантированный снос файла при падении внутри try

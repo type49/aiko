@@ -3,6 +3,7 @@ from interfaces import AikoCommand
 from utils.matcher import CommandMatcher
 from utils.logger import logger
 
+1/0
 
 class TimePlugin(AikoCommand):
     def __init__(self):

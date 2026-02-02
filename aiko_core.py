@@ -4,7 +4,7 @@ import threading
 import importlib.util
 from pathlib import Path
 from vosk import Model, KaldiRecognizer
-
+import queue
 from interfaces import AikoCommand
 from utils.db_manager import db
 from utils.logger import logger
@@ -36,7 +36,7 @@ class AikoContext:
         self.ui_log = lambda text, type: None
         self.ui_open_reminder = lambda text: None
         self.ui_status = lambda status: None
-
+        self.ui_audio_status = lambda is_ok, msg: None
 
 class AikoCore:
     def __init__(self, ctx=None):
@@ -50,7 +50,11 @@ class AikoCore:
         self.model = Model(str(self.ctx.model_path))
         self.rec = KaldiRecognizer(self.model, 16000)
 
-        self.audio = AudioHandler(device_id=self.ctx.device_id)
+        self.audio = AudioHandler(
+            device_id=self.ctx.device_id,
+            on_status_change=self.ctx.ui_audio_status
+        )
+
         self.stop_event = threading.Event()
 
         self._load_plugins()
@@ -109,15 +113,16 @@ class AikoCore:
 
         while self.ctx.is_running:
             curr_t = time.time()
-
-            # Сброс активного окна (если долго молчим)
             in_win = (curr_t - self.ctx.last_activation_time) < self.ctx.active_window
+
             if not in_win and self.ctx.state == "active":
                 self.set_state("idle")
 
             try:
+                # 1. Получаем данные ВСЕГДА (с таймаутом, чтобы не блокировать цикл)
                 data = self.audio.audio_q.get(timeout=0.2)
 
+                # 2. Обрабатываем только если данные реально пришли
                 if self.rec.AcceptWaveform(data):
                     res = json.loads(self.rec.Result()).get('text', '')
                     if res:
@@ -130,17 +135,20 @@ class AikoCore:
                             self.set_state("active")
                             self.ctx.last_activation_time = time.time()
                             if cmd_text and self.process_logic(cmd_text):
-                                self.ctx.last_activation_time = 0  # Сброс окна после выполнения
+                                self.ctx.last_activation_time = 0
                         elif in_win:
                             if getattr(self.ctx, 'log_commands', False):
                                 logger.info(f" ГИПЕРФОКУС: Уточнение -> '{res}'")
                             if self.process_logic(res):
                                 self.ctx.last_activation_time = 0
 
-            except Exception as e:
-                if self.ctx.mic_active and not self.audio.is_active:
-                    self.set_state("blocked")
+            except queue.Empty:
+                # Это нормально, если в очереди пока пусто
                 continue
+            except Exception as e:
+                logger.error(f"Core Run Error: {e}")
+                continue
+
 
     def _scheduler_loop(self):
         """Фоновый планировщик задач и тиков."""
