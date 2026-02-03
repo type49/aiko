@@ -6,6 +6,10 @@
         "device_index": 0,
         "master_volume": 1.0
     },
+    "telegram": {
+        "token": "8114737883:AAGMnDFVstTCFoU2JcW8pg6eK485D3EXNFE",
+        "secret_phrase": "айко"
+    },
     "trigger": {
         "names": [
             "айко",
