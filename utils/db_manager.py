@@ -65,6 +65,15 @@ class DBManager:
                     value TEXT
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tg_outbox (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message TEXT NOT NULL,
+                    priority INTEGER DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    status TEXT DEFAULT 'pending'
+                )
+            """)
             conn.commit()
 
     def _report_runtime_error(self, error):
@@ -137,5 +146,39 @@ class DBManager:
             # Здесь не репортим в HUD, чтобы не спамить при пустых запросах
             return default
 
+    # TELEGRAM
+
+    # Методы для управления очередью
+    # В методе add_tg_message
+    def add_tg_message(self, text, priority=0):
+        # Генерируем локальное время в Python
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "INSERT INTO tg_outbox (message, priority, created_at) VALUES (?, ?, ?)",
+                    (text, priority, now)
+                )
+            return True
+        except Exception as e:
+            logger.error(f"DB: Error {e}")
+            return False
+
+    def get_pending_tg_messages(self):
+        if not self.is_functional: return []
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                # Берем старые сообщения первыми (Strict Ordering)
+                cursor.execute("SELECT id, message, created_at FROM tg_outbox WHERE status = 'pending' ORDER BY id ASC")
+                return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"DB: Ошибка чтения ТГ-очереди: {e}")
+            return []
+
+    def mark_tg_sent(self, msg_id):
+        if not self.is_functional: return
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM tg_outbox WHERE id = ?", (msg_id,))  # Или меняй статус на 'sent'
 
 db = DBManager()

@@ -4,7 +4,8 @@ import threading
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor
 from PySide6.QtCore import QObject, Qt
-
+import asyncio
+from services.telegram.bot import AikoTelegramService
 from ui.signals import AikoSignals
 from ui.notifications import PopupNotification
 from ui.dialogs import ReminderDialog
@@ -48,6 +49,10 @@ class AikoApp(QObject):
         # Инициализация ядра
         self.core = AikoCore(self.ctx)
 
+        # Инициализация телеги
+        self.tg_service = AikoTelegramService(self.ctx, self.core)
+        threading.Thread(target=self._start_tg_event_loop, daemon=True, name="TGThread").start()
+
         # UI компоненты
         self.popup = PopupNotification()
         self.tray = QSystemTrayIcon()
@@ -55,6 +60,11 @@ class AikoApp(QObject):
 
         logger.info("GUI: Все компоненты инициализированы. Запуск рабочего потока Ядра.")
         threading.Thread(target=self.core.run, daemon=True, name="CoreThread").start()
+
+    def _start_tg_event_loop(self):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(self.tg_service.start())
 
     def _init_tray(self):
         self.update_tray_icon("idle")

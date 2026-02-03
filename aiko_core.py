@@ -17,26 +17,69 @@ class AikoContext:
     """Объект состояния системы. Передается между Ядром, GUI и Плагинами."""
 
     def __init__(self):
+        # Состояние работы
         self.is_running = True
+        self.state = "idle"  # idle, active, blocked, error
+
+        # Настройки аудио
         self.mic_active = True
+        self.device_id = aiko_cfg.get("audio.device_id", 1)
+        self.active_window = aiko_cfg.get("trigger.active_window", 5.0)
         self.last_activation_time = 0
-        self.active_window = 5.0
-        self.device_id = 1
+
+        # Пути и команды
         self.model_path = Path("models/small/vosk-model-small-ru-0.22")
         self.commands = []
 
-        self.device_id = aiko_cfg.get("audio.device_id", 1)
-        self.active_window = aiko_cfg.get("trigger.active_window", 5.0)
+        # Telegram данные
+        self.tg_chat_id = aiko_cfg.get("telegram.chat_id")
+
+        # Логирование и отладка
         self.log_commands = aiko_cfg.get("debug.log_commands", True)
+        self.last_phrase = ""
 
-        self.state = "idle"
+        # NEW: Источник последнего ввода (mic, tg, gui)
+        self.last_input_source = "mic"
 
-        self.log_commands = True
-
-        self.ui_log = lambda text, type: None
+        # Коллбэки для UI (инициализируются в AikoApp)
+        self.ui_log = lambda text, level: None
         self.ui_open_reminder = lambda text: None
         self.ui_status = lambda status: None
         self.ui_audio_status = lambda is_ok, msg: None
+
+    def broadcast(self, text, level="info"):
+        """Системное вещание: орет во все каналы (GUI + TG)"""
+        logger.info(f"BROADCAST: {text}")
+        # 1. В HUD GUI
+        if self.ui_log:
+            self.ui_log(text, level)
+        # 2. В очередь ТГ
+        db.add_tg_message(f"📢 {text}")
+
+    def reply(self, text, level="info", to_all=False):
+        """
+        Универсальный ответ на команду.
+        Если to_all=True, ведет себя как broadcast.
+        Если False (дефолт) — отвечает в GUI и в ТГ (только если запрос был из ТГ).
+        """
+        # В HUD пишем только если запрос был НЕ из ТГ или если стоит флаг to_all
+        if self.last_input_source != "tg" or to_all:
+            if self.ui_log: self.ui_log(text, level)
+
+        # В Telegram шлем всегда, если запрос из ТГ
+        if self.last_input_source == "tg" or to_all:
+            db.add_tg_message(text)
+
+        # 2. Логирование в консоль
+        logger.info(f"REPLY [{self.last_input_source}]: {text}")
+
+
+    def set_input_source(self, source):
+        """Метод для переключения источника (вызывается в Core или Bridge)"""
+        if source in ["mic", "tg", "gui"]:
+            self.last_input_source = source
+
+
 
 class AikoCore:
     def __init__(self, ctx=None):
@@ -119,7 +162,7 @@ class AikoCore:
                 self.set_state("idle")
 
             try:
-                # 1. Получаем данные ВСЕГДА (с таймаутом, чтобы не блокировать цикл)
+                # 1. Получаем данные ВСЕГДА
                 data = self.audio.audio_q.get(timeout=0.2)
 
                 # 2. Обрабатываем только если данные реально пришли
@@ -130,24 +173,34 @@ class AikoCore:
                         is_trig, cmd_text = self._check_trigger(res)
 
                         if is_trig:
+                            # ФИКС: Команда пришла голосом
+                            self.ctx.set_input_source("mic")
+
                             if getattr(self.ctx, 'log_commands', False):
                                 logger.info(f" ГИПЕРФОКУС: Получена команда -> '{cmd_text}'")
+
                             self.set_state("active")
                             self.ctx.last_activation_time = time.time()
+
                             if cmd_text and self.process_logic(cmd_text):
                                 self.ctx.last_activation_time = 0
+
                         elif in_win:
+                            # ФИКС: Уточнение в окне дослушивания — это тоже микрофон
+                            self.ctx.set_input_source("mic")
+
                             if getattr(self.ctx, 'log_commands', False):
                                 logger.info(f" ГИПЕРФОКУС: Уточнение -> '{res}'")
+
                             if self.process_logic(res):
                                 self.ctx.last_activation_time = 0
 
             except queue.Empty:
-                # Это нормально, если в очереди пока пусто
                 continue
             except Exception as e:
                 logger.error(f"Core Run Error: {e}")
                 continue
+
 
 
     def _scheduler_loop(self):
