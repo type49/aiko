@@ -5,3 +5,4 @@ class AikoSignals(QObject):
     display_message = Signal(str, str)
     open_reminder = Signal(str)
     audio_status_changed = Signal(bool, str)
+    show_alarm = Signal(dict)

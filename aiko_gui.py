@@ -4,172 +4,95 @@ import sys
 import threading
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor
-from PySide6.QtCore import QObject, Qt
+from PySide6.QtCore import QObject, Qt, QDateTime
 import asyncio
+
 from services.telegram.bot import AikoTelegramService
+from ui.reminder import ReminderManager, ReminderCreateDialog, AlarmWindow
 from ui.signals import AikoSignals
 from ui.notifications import PopupNotification
-from ui.dialogs import ReminderDialog
 from ui.settings import SettingsWindow
 
 from aiko_core import AikoCore, AikoContext
+from ui.tray import AikoTray
 from utils.logger import logger
 from utils.lifecycle import lifecycle
 
-class WindowManager:
-    @staticmethod
-    def get_reminder_input(initial_text=""):
-        logger.info(f"UI: Открытие диалога напоминания. Текст: '{initial_text}'")
-        dialog = ReminderDialog(initial_text)
-        if dialog.exec():
-            data = dialog.get_data()
-            logger.info(f"UI: Пользователь ввел данные: {data}")
-            return data # Возвращаем словарь целиком
-        logger.info("UI: Диалог напоминания отменен пользователем.")
-        return None # Возвращаем просто None вместо None, None
-
 
 class AikoApp(QObject):
-    def __init__(self):
+    def __init__(self, ctx, core):
         super().__init__()
-        logger.info("GUI: Запуск интерфейса...")
-        self.ctx = AikoContext()
+        self.ctx = ctx
+        self.core = core
         self.signals = AikoSignals()
 
-        # Проброс сигналов в контекст
+        # Состояния окон
+        self.active_alarms = []
+        self.manager_win = None
+        self.settings_win = None
+
+        # Инициализация визуальных компонентов
+        self.popup = PopupNotification()
+        self.tray = AikoTray(self)
+
+        self._bind_context()
+        self._connect_signals()
+        logger.info("GUI: Интерфейс успешно инициализирован.")
+
+    def _bind_context(self):
         self.ctx.ui_log = self.signals.display_message.emit
         self.ctx.ui_open_reminder = self.signals.open_reminder.emit
-        self.ctx.ui_status = self.update_tray_icon
+        self.ctx.ui_status = self.tray.update_icon # Напрямую в трей
         self.ctx.ui_audio_status = self.signals.audio_status_changed.emit
+        self.ctx.ui_show_alarm = self.signals.show_alarm.emit
 
-        # Подключаем обработчики сигналов в GUI
+    def _connect_signals(self):
         self.signals.display_message.connect(self.receive_message)
         self.signals.open_reminder.connect(self._handle_reminder_ui)
         self.signals.audio_status_changed.connect(self._handle_audio_status_change)
+        self.signals.show_alarm.connect(self._handle_alarm_display)
 
-        # Инициализация ядра
-        self.core = AikoCore(self.ctx)
+    # --- Методы управления окнами ---
+    def _handle_reminder_ui(self, text):
+        dialog = ReminderCreateDialog(text)
+        if dialog.exec():
+            self.receive_message("Напоминалка сохранена", "success")
 
-        # Инициализация телеги
-        self.tg_service = AikoTelegramService(self.ctx, self.core)
-        threading.Thread(target=self._start_tg_event_loop, daemon=True, name="TGThread").start()
+    def _handle_alarm_display(self, data):
+        alarm = AlarmWindow(data, on_close_callback=lambda obj: self.active_alarms.remove(obj))
+        geo = QApplication.primaryScreen().geometry()
+        alarm.move((geo.width() - alarm.width()) // 2, (geo.height() - alarm.height()) // 2)
+        self.active_alarms.append(alarm)
+        alarm.show()
 
-        # UI компоненты
-        self.popup = PopupNotification()
-        self.tray = QSystemTrayIcon()
-        self._init_tray()
-
-        logger.info("GUI: Все компоненты инициализированы. Запуск рабочего потока Ядра.")
-        threading.Thread(target=self.core.run, daemon=True, name="CoreThread").start()
-
-    def _start_tg_event_loop(self):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(self.tg_service.start())
-
-    def _init_tray(self):
-        self.update_tray_icon("idle")
-        menu = QMenu()
-
-        settings_action = menu.addAction("Настройки")
-        settings_action.triggered.connect(self.show_settings)
-
-        menu.addSeparator()
-        menu.addAction("Выход", self.quit_app)
-
-        self.tray.setContextMenu(menu)
-        self.tray.show()
-        logger.debug("GUI: Системный трей готов. Пункт 'Настройки' добавлен.")
-
-    def _handle_audio_status_change(self, is_ok, message):
-        if is_ok:
-            logger.info("GUI: Микрофон восстановлен.")
-            self.update_tray_icon("idle")
-            self.receive_message("Микрофон подключен", "success")
-        else:
-            logger.warning(f"GUI: Ошибка микрофона: {message}")
-            self.update_tray_icon("blocked")  # та самая черная иконка
-            self.receive_message(f"Микрофон отключен: {message}", "error")
+    def show_reminder_manager(self):
+        if not self.manager_win:
+            self.manager_win = ReminderManager()
+        self.manager_win.refresh_list()
+        self.manager_win.show()
 
     def show_settings(self):
-        logger.info("GUI: Создание нового экземпляра окна настроек.")
         self.settings_win = SettingsWindow()
-        self.settings_win.settings_saved.connect(self.on_settings_updated)
+        self.settings_win.settings_saved.connect(self._on_settings_updated)
         self.settings_win.show()
-        self.settings_win.activateWindow()
-        self.settings_win.raise_()
 
-    def on_settings_updated(self):
-        self.receive_message("Системные настройки обновлены", "info")
+    def _on_settings_updated(self):
+        self.receive_message("Настройки обновлены", "info")
         if hasattr(self.core, 'restart_audio_capture'):
             self.core.restart_audio_capture()
 
-    def update_tray_icon(self, status):
-        colors = {"idle": "#00FFCC", "active": "#FF0000", "blocked": "#000000", "off": "#555555", "error": "#000000",}
-        pixmap = QPixmap(64, 64)
-        pixmap.fill(Qt.transparent)
-        p = QPainter(pixmap)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setBrush(QColor(colors.get(status, "#00FFCC")))
-        p.drawEllipse(12, 12, 40, 40)
-        p.end()
-        self.tray.setIcon(QIcon(pixmap))
+    def _handle_audio_status_change(self, is_ok, message):
+        if is_ok:
+            self.core.set_state("idle")
+            self.receive_message("Микрофон подключен", "success")
+        else:
+            self.core.set_state("blocked")
+            self.receive_message(f"Ошибка аудио: {message}", "error")
 
-    def _handle_reminder_ui(self, text):
-        logger.info("GUI: Получен сигнал на открытие планировщика.")
-
-        # 1. Получаем единый объект данных (словарь)
-        reminder_data = WindowManager.get_reminder_input(text)
-
-        # 2. Проверяем, что пользователь не нажал "Отмена"
-        if reminder_data:
-            # Извлекаем данные для лога и планировщика
-            content_text = reminder_data.get('text', 'Пусто')
-            target_dt = reminder_data.get('time')
-
-            # СЕРИАЛИЗАЦИЯ: Превращаем словарь в строку перед отправкой в БД планировщика
-            # ensure_ascii=False нужен для корректного сохранения кириллицы
-            json_payload = json.dumps(reminder_data, ensure_ascii=False)
-
-            # 3. Передаем JSON-строку в ядро
-            if self.core.add_scheduler_task("reminder", json_payload, target_dt):
-                logger.info(f"GUI: Задача '{content_text}' успешно передана в Ядро на {target_dt}.")
-                self.receive_message(f"Задача зафиксирована на {target_dt}", "success")
 
     def receive_message(self, text, msg_type):
-        logger.info(f"HUD: [{msg_type.upper()}] {text}")
         self.popup.add_item(text, msg_type)
 
     def quit_app(self):
-        """Корректное завершение всех процессов"""
-        logger.warning("GUI: Запрошено завершение приложения.")
         self.ctx.is_running = False
-
-        # Принудительно сбрасываем буфер логов на диск перед закрытием
-        for handler in logger.handlers:
-            handler.flush()
-            handler.close()
-
         QApplication.quit()
-
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(False)
-
-    # --- ПРИМЕНЕНИЕ ЛОГИКИ ЛАЙФСАЙКЛА ---
-    lifecycle.check_previous_session() # 1. Проверяем старый файл
-    lifecycle.create_lock()            # 2. Создаем новый
-    atexit.register(lifecycle.cleanup) # 3. Регистрируем авто-удаление
-    # ------------------------------------
-
-    aiko_instance = None
-    try:
-        aiko_instance = AikoApp()
-        sys.exit(app.exec())
-
-    except Exception as e:
-        logger.critical(f"GUI: КРИТИЧЕСКИЙ ВЫЛЕТ СИСТЕМЫ: {e}", exc_info=True)
-        # cleanup выполнится либо здесь, либо через atexit
-    finally:
-        lifecycle.cleanup() # Гарантированный снос файла при падении внутри try

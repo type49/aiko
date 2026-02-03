@@ -181,4 +181,32 @@ class DBManager:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM tg_outbox WHERE id = ?", (msg_id,))  # Или меняй статус на 'sent'
 
+    def get_all_scheduler_tasks(self):
+        """Возвращает все активные задачи для Менеджера"""
+        if not self.is_functional: return []
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                # Берем только pending, чтобы не забивать список историей
+                cursor.execute(
+                    "SELECT id, payload, exec_at, type FROM scheduler WHERE status = 'pending' ORDER BY exec_at ASC"
+                )
+                return cursor.fetchall()
+        except Exception as e:
+            self._report_runtime_error(e)
+            return []
+
+    def delete_task(self, task_id):
+        """Принудительное удаление задачи из БД"""
+        if not self.is_functional: return False
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("DELETE FROM scheduler WHERE id = ?", (task_id,))
+                conn.commit()
+            logger.info(f"БД: Задача ID {task_id} удалена.")
+            return True
+        except Exception as e:
+            self._report_runtime_error(e)
+            return False
+
 db = DBManager()

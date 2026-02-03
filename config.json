@@ -4,7 +4,7 @@
         "samplerate": 16000,
         "match_threshold": 80,
         "device_index": 0,
-        "master_volume": 1.0
+        "master_volume": 0.07
     },
     "telegram": {
         "token": "8114737883:AAGMnDFVstTCFoU2JcW8pg6eK485D3EXNFE",
