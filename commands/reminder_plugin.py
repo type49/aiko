@@ -1,3 +1,4 @@
+import json
 import re
 from interfaces import AikoCommand
 from utils.audio_player import audio_manager
@@ -71,8 +72,38 @@ class ReminderPlugin(AikoCommand):
 
         return payload.capitalize()
 
-    def on_schedule(self, payload, ctx):
-        """Сработка таймера из планировщика Ядра"""
-        logger.info(f"ReminderPlugin: Исполнение таймера -> {payload}")
-        ctx.ui_log(f"НАПОМИНАНИЕ: {payload}", "cmd")
-        audio_manager.play("assets/sound/system/alarm.wav", volume=0.8)
+    def on_schedule(self, data, ctx):
+        """
+        data — это payload из базы.
+        Благодаря json.dumps в GUI, здесь мы получаем JSON-строку.
+        """
+        # ДЕСЕРИАЛИЗАЦИЯ
+        try:
+            # Если пришла строка (из JSON), парсим её. Если уже словарь (вдруг) — оставляем.
+            if isinstance(data, str):
+                payload = json.loads(data)
+            else:
+                payload = data
+        except Exception as e:
+            logger.error(f"ReminderPlugin: Ошибка парсинга данных планировщика: {e}")
+            # Фолбэк на случай, если в базе старая запись (просто текст)
+            payload = {"text": str(data), "to_gui": True, "to_tg": False}
+
+        # Теперь безопасно извлекаем ключи
+        text = payload.get('text', 'Пустое напоминание')
+        to_gui = payload.get('to_gui', True)
+        to_tg = payload.get('to_tg', False)
+
+        logger.info(f"ReminderPlugin: Исполнение задачи -> {text} (GUI:{to_gui}, TG:{to_tg})")
+
+        # 1. Если нужно на компе
+        if to_gui:
+            # Используем ui_log для вывода в HUD
+            ctx.ui_log(f"⏰ НАПОМИНАНИЕ: {text}", "cmd")
+            audio_manager.play("assets/sound/system/alarm.wav", volume=0.8)
+
+        # 2. Если нужно в телегу
+        if to_tg:
+            # Прямая запись в очередь Telegram
+            from utils.db_manager import db
+            db.add_tg_message(f"🔔 НАПОМИНАНИЕ: {text}")

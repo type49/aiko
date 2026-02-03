@@ -1,4 +1,5 @@
 import atexit
+import json
 import sys
 import threading
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
@@ -23,9 +24,9 @@ class WindowManager:
         if dialog.exec():
             data = dialog.get_data()
             logger.info(f"UI: Пользователь ввел данные: {data}")
-            return data
+            return data # Возвращаем словарь целиком
         logger.info("UI: Диалог напоминания отменен пользователем.")
-        return None, None
+        return None # Возвращаем просто None вместо None, None
 
 
 class AikoApp(QObject):
@@ -116,11 +117,24 @@ class AikoApp(QObject):
 
     def _handle_reminder_ui(self, text):
         logger.info("GUI: Получен сигнал на открытие планировщика.")
-        content, dt = WindowManager.get_reminder_input(text)
-        if content and dt:
-            if self.core.add_scheduler_task("reminder", content, dt):
-                logger.info("GUI: Задача успешно передана в Ядро.")
-                self.receive_message(f"Задача зафиксирована на {dt}", "success")
+
+        # 1. Получаем единый объект данных (словарь)
+        reminder_data = WindowManager.get_reminder_input(text)
+
+        # 2. Проверяем, что пользователь не нажал "Отмена"
+        if reminder_data:
+            # Извлекаем данные для лога и планировщика
+            content_text = reminder_data.get('text', 'Пусто')
+            target_dt = reminder_data.get('time')
+
+            # СЕРИАЛИЗАЦИЯ: Превращаем словарь в строку перед отправкой в БД планировщика
+            # ensure_ascii=False нужен для корректного сохранения кириллицы
+            json_payload = json.dumps(reminder_data, ensure_ascii=False)
+
+            # 3. Передаем JSON-строку в ядро
+            if self.core.add_scheduler_task("reminder", json_payload, target_dt):
+                logger.info(f"GUI: Задача '{content_text}' успешно передана в Ядро на {target_dt}.")
+                self.receive_message(f"Задача зафиксирована на {target_dt}", "success")
 
     def receive_message(self, text, msg_type):
         logger.info(f"HUD: [{msg_type.upper()}] {text}")
