@@ -69,8 +69,17 @@ class AikoCore:
                 self._monitor_health()
                 self.activation.handle_timeouts(self.set_state)
 
+                for cmd in self.ctx.commands:
+                    if hasattr(cmd, 'on_tick'):
+                        try:
+                            cmd.on_tick(self.ctx)
+                        except Exception as e:
+                            logger.error(f"Core: Ошибка тика в {cmd.__class__.__name__}: {e}")
+                    # ----------------------------------
+
                 try:
-                    data = self.audio.audio_q.get(timeout=0.2)
+                    # Уменьшаем timeout, чтобы цикл крутился чаще и тики были точнее
+                    data = self.audio.audio_q.get(timeout=0.1)
                     phrase = self.stt.get_phrase(data)
 
                     if phrase:
