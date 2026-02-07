@@ -4,7 +4,8 @@ ENV/
 pyvenv.cfg
 
 models/
-
+assets/
+config.json
 *.db
 aiko_data.db
 logs/

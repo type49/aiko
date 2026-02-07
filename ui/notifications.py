@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QFrame, QLabel,
     QGraphicsOpacityEffect, QApplication, QHBoxLayout
 )
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QPoint, QObject, QEasingCurve
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QPoint, QObject, QEasingCurve, Property
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import QGraphicsBlurEffect
 from PySide6.QtMultimedia import QSoundEffect
@@ -28,7 +28,7 @@ class ToastConfig:
     font_size: int = 13
     fade_duration: int = 280
     slide_duration: int = 280
-    auto_hide_delay: int = 30000
+    auto_hide_delay: int = 5000
     reposition_duration: int = 200
 
 
@@ -82,13 +82,68 @@ class ToastStyles:
 
 
 # ============================================================
+# PROGRESS BAR WIDGET
+# ============================================================
+
+class ProgressBar(QWidget):
+    """Прогресс-бар внизу тоста"""
+
+    def __init__(self, color: str, duration: int, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(2)
+        self._progress = 1.0
+        self._color = color
+        self._duration = duration
+
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color: {color};
+                opacity: 0.3;
+            }}
+        """)
+
+    def get_progress(self):
+        return self._progress
+
+    def set_progress(self, value):
+        self._progress = value
+        self.update()
+
+    progress = Property(float, get_progress, set_progress)
+
+    def start_animation(self):
+        """Запуск анимации уменьшения"""
+        if self._duration <= 0:
+            return
+
+        self.anim = QPropertyAnimation(self, b"progress")
+        self.anim.setDuration(self._duration)
+        self.anim.setStartValue(1.0)
+        self.anim.setEndValue(0.0)
+        self.anim.setEasingCurve(QEasingCurve.Linear)
+        self.anim.start()
+
+    def paintEvent(self, event):
+        """Отрисовка с учётом прогресса"""
+        from PySide6.QtGui import QPainter, QColor
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Парсим цвет
+        color = QColor(self._color)
+        color.setAlphaF(0.3)
+        painter.fillRect(0, 0, int(self.width() * self._progress), self.height(), color)
+
+
+# ============================================================
 # TOAST ITEM
 # ============================================================
 
 class ToastItem(QWidget):
     """Визуальный компонент уведомления"""
 
-    def __init__(self, text: str, msg_type: str, priority: Optional[str], config: ToastConfig, manager):
+    def __init__(self, text: str, msg_type: str, priority: Optional[str],
+                 config: ToastConfig, manager, lifetime: Optional[int] = None):
         super().__init__()
 
         self.text = text
@@ -97,6 +152,8 @@ class ToastItem(QWidget):
         self.config = config
         self.manager = manager
         self.final_pos = QPoint(0, 0)
+        self.lifetime = lifetime if lifetime is not None else self.config.auto_hide_delay
+        self._is_hiding = False  # Флаг для предотвращения повторного показа
 
         self._setup_window()
         self._create_ui()
@@ -112,14 +169,19 @@ class ToastItem(QWidget):
         """Создание интерфейса"""
         colors = ToastStyles.get_colors(self.msg_type, self.priority)
 
+        # Main layout
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
         # Container
-        self.container = QFrame(self)
+        self.container = QFrame()
         self.container.setObjectName("toast")
         self.container.setStyleSheet(f"""
             QFrame#toast {{
                 background-color: {colors['bg']};
                 border-top-left-radius: {self.config.border_radius}px;
-                border-bottom-left-radius: {self.config.border_radius}px;
+                border-top-right-radius: {self.config.border_radius}px;
             }}
             QLabel {{
                 color: #F2F2F7;
@@ -146,7 +208,6 @@ class ToastItem(QWidget):
         self.accent_bar.setStyleSheet(f"""
             background-color: {colors['bar']};
             border-top-left-radius: {self.config.border_radius}px;
-            border-bottom-left-radius: {self.config.border_radius}px;
         """)
 
         # Label
@@ -161,6 +222,13 @@ class ToastItem(QWidget):
 
         root.addWidget(self.accent_bar)
         root.addLayout(content)
+
+        # Progress bar
+        self.progress_bar = ProgressBar(colors['bar'], self.lifetime)
+
+        # Add to main layout
+        main_layout.addWidget(self.container)
+        main_layout.addWidget(self.progress_bar)
 
         # Size calculation
         self._calculate_size()
@@ -180,9 +248,10 @@ class ToastItem(QWidget):
 
         self.label.setFixedWidth(target_width - 40)
         self.container.setFixedWidth(target_width)
+        self.progress_bar.setFixedWidth(target_width)
         self.label.adjustSize()
         self.container.adjustSize()
-        self.setFixedSize(self.container.sizeHint())
+        self.adjustSize()
 
     def _setup_animations(self):
         """Настройка анимаций"""
@@ -194,6 +263,12 @@ class ToastItem(QWidget):
         self.slide_anim.setDuration(self.config.slide_duration)
         self.slide_anim.setEasingCurve(QEasingCurve.OutCubic)
 
+        # Отдельная анимация для скрытия
+        self.hide_slide_anim = QPropertyAnimation(self, b"pos")
+        self.hide_slide_anim.setDuration(self.config.slide_duration)
+        self.hide_slide_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.hide_slide_anim.finished.connect(self._destroy)
+
     def _play_sound(self):
         """Воспроизведение звука"""
         colors = ToastStyles.get_colors(self.msg_type, self.priority)
@@ -202,11 +277,14 @@ class ToastItem(QWidget):
 
     def reposition(self, index: int, animated: bool = False):
         """Установка позиции тоста"""
-        screen = QApplication.primaryScreen().availableGeometry()
-        w, h = self.width(), self.height()
+        if self._is_hiding:  # Не перемещаем тост, который скрывается
+            return
 
-        x = screen.right() - w
-        y = screen.bottom() - ((h + self.config.spacing) * (index + 1)) - 12
+        screen = QApplication.primaryScreen().availableGeometry()
+        w, h = self.height(), self.height()
+
+        x = screen.right() - self.width()
+        y = screen.bottom() - ((self.height() + self.config.spacing) * (index + 1)) - 12
         new_pos = QPoint(x, y)
 
         if not self.isVisible():
@@ -222,6 +300,9 @@ class ToastItem(QWidget):
 
     def _animate_move(self, new_pos: QPoint):
         """Плавное перемещение"""
+        if self._is_hiding:  # Не анимируем перемещение для скрывающегося тоста
+            return
+
         anim = QPropertyAnimation(self, b"pos")
         anim.setDuration(self.config.reposition_duration)
         anim.setStartValue(self.pos())
@@ -245,14 +326,31 @@ class ToastItem(QWidget):
         self.slide_anim.setEndValue(self.final_pos)
         self.slide_anim.start()
 
+        # Start progress bar animation
+        if self.lifetime > 0:
+            self.progress_bar.start_animation()
+
         # Auto-hide
-        QTimer.singleShot(self.config.auto_hide_delay, self.hide_toast)
+        if self.lifetime > 0:  # Если 0, можно сделать уведомление вечным
+            QTimer.singleShot(self.lifetime, self.hide_toast)
 
     def hide_toast(self):
-        """Скрытие с анимацией"""
-        self.fade_anim.setDirection(QPropertyAnimation.Backward)
-        self.fade_anim.finished.connect(self._destroy)
-        self.fade_anim.start()
+        """Скрытие с анимацией уезжания вправо"""
+        if self._is_hiding:  # Предотвращаем повторное скрытие
+            return
+
+        self._is_hiding = True
+        screen = QApplication.primaryScreen().availableGeometry()
+
+        # Останавливаем все текущие анимации перемещения
+        if hasattr(self, '_move_anim'):
+            self._move_anim.stop()
+        self.slide_anim.stop()
+
+        # Анимация уезжания вправо
+        self.hide_slide_anim.setStartValue(self.pos())
+        self.hide_slide_anim.setEndValue(QPoint(screen.right() + 50, self.pos().y()))
+        self.hide_slide_anim.start()
 
     def _destroy(self):
         """Удаление тоста"""
@@ -290,52 +388,57 @@ class PopupNotification(QObject):
         """Установить обработчик для типа сообщений"""
         self._click_handlers[msg_type] = handler
 
-    def add_item(self, text: str, msg_type: str = "info", priority: Optional[str] = None):
+    def add_item(self, text: str, msg_type: str = "info",
+                 priority: Optional[str] = None,
+                 lifetime: Optional[int] = None):
         """Показать уведомление"""
-        # Проверка фильтров
+        # 1. Проверка фильтров
         if any(f(text) for f in self._filters):
             return
 
+        # 2. Создание тоста с пробросом lifetime
         toast = ToastItem(
             text=text,
             msg_type=msg_type,
             priority=priority,
             config=self.config,
-            manager=self
+            manager=self,
+            lifetime=lifetime
         )
 
-        self.active_toasts.append(toast)
-        self._reposition_all(animated=False)
+        # 3. Добавление в начало списка.
+        # Новые уведомления будут иметь индекс 0 и рисоваться в самой нижней позиции.
+        self.active_toasts.insert(0, toast)
+
+        # 4. Сначала рассчитываем позиции для всех, потом показываем новый
+        self._reposition_all(animated=True)
         toast.show_toast()
 
     def remove_item(self, item: ToastItem):
-        """Удалить тост из списка"""
+        """Удалить тост из списка активных"""
         if item in self.active_toasts:
             self.active_toasts.remove(item)
+            # Анимированно подтягиваем оставшиеся тосты на свободные места
             self._reposition_all(animated=True)
 
     def _reposition_all(self, animated: bool):
-        """Обновить позиции всех тостов"""
+        """Обновить позиции всех тостов согласно их индексу в списке"""
         for i, toast in enumerate(self.active_toasts):
             toast.reposition(i, animated=animated)
 
     def handle_click(self, toast: ToastItem):
         """Обработка клика по тосту"""
-        # Кастомный обработчик
         if toast.msg_type in self._click_handlers:
             self._click_handlers[toast.msg_type](toast.text, toast.priority)
+            toast.hide_toast()  # Закрываем после обработки клика
             return
 
-        # Дефолтная обработка
+        # Логирование (замени на logger при необходимости)
         print(f"[Toast] {toast.msg_type} clicked: {toast.text}")
-
-        if toast.priority == "critical":
-            print("  → Critical action")
-        elif toast.priority == "warning":
-            print("  → Warning action")
 
     def clear_all(self):
         """Закрыть все уведомления"""
+        # Используем срез [:], так как оригинальный список будет меняться при удалении
         for toast in self.active_toasts[:]:
             toast.hide_toast()
 
@@ -363,9 +466,9 @@ if __name__ == "__main__":
 
     # Использование (как у вас в ctx.reply)
     notifications.add_item("Простое уведомление", "info")
-    notifications.add_item("Успешно выполнено", "success")
+    notifications.add_item("Успешно выполнено", "success", lifetime=2000)
     notifications.add_item("Внимание!", "info", priority="warning")
     notifications.add_item("Критическая ошибка!", "error", priority="critical")
-    notifications.add_item("Команда выполнена", "cmd", priority="critical")
+    notifications.add_item("Команда выполнена", "cmd", priority="critical", lifetime=0)
 
     app.exec()
