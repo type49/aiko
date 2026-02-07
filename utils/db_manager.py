@@ -22,22 +22,28 @@ class DBManager:
 
     def _init_db(self):
         """Проверка физического состояния и инициализация схем."""
+        conn = None
         try:
             if os.path.exists(self.db_path):
-                with sqlite3.connect(self.db_path) as conn:
-                    # Быстрая проверка на повреждение структуры файла
-                    res = conn.execute("PRAGMA integrity_check").fetchone()
-                    if res[0] != "ok":
-                        raise sqlite3.DatabaseError("Integrity check failed")
+                # Открываем соединение без контекстного менеджера для ручного контроля
+                conn = sqlite3.connect(self.db_path)
+                res = conn.execute("PRAGMA integrity_check").fetchone()
+                if res[0] != "ok":
+                    raise sqlite3.DatabaseError("Integrity check failed")
 
-                    # Перевод в режим WAL для стабильной многопоточности
-                    conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.close()  # Закрываем перед основной стадией
 
             self._create_tables()
             self.is_functional = True
             logger.info("DB: Система запущена в штатном режиме (WAL enabled).")
         except (sqlite3.DatabaseError, sqlite3.OperationalError) as e:
             logger.error(f"DB: Обнаружено повреждение базы: {e}")
+            if conn:
+                try:
+                    conn.close()
+                except:
+                    pass
             self._handle_corruption()
 
     def _handle_corruption(self):
@@ -57,9 +63,13 @@ class DBManager:
             logger.critical(f"DB: Фатальный сбой ФС при восстановлении: {e}")
 
     def _create_tables(self):
-        """Создание схемы данных."""
+        """Создание схемы данных с индексами."""
         with sqlite3.connect(self.db_path) as conn:
-            # Планировщик задач (Reminders, Timers)
+            # Настройка режима для КАЖДОГО нового подключения или создания
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")  # Оптимально для WAL
+
+            # Планировщик задач + ИНДЕКС
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS scheduler (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,14 +79,17 @@ class DBManager:
                     status TEXT DEFAULT 'pending'
                 )
             """)
-            # Постоянное хранилище настроек плагинов
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sch_pending ON scheduler(status, exec_at)")
+
+            # KV Store
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS kv_store (
                     key TEXT PRIMARY KEY,
                     value TEXT
                 )
             """)
-            # Очередь исходящих для Telegram (Pattern: Transactional Outbox)
+
+            # Outbox + ИНДЕКС
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS tg_outbox (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,6 +99,7 @@ class DBManager:
                     status TEXT DEFAULT 'pending'
                 )
             """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tg_pending ON tg_outbox(status, priority DESC)")
             conn.commit()
 
     # --- SHARED HELPERS ---
@@ -153,8 +167,15 @@ class DBManager:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 row = conn.execute("SELECT value FROM kv_store WHERE key = ?", (key,)).fetchone()
-                return json.loads(row[0]) if row else default
-        except:
+                if not row: return default
+
+                raw_val = row[0]
+                try:
+                    return json.loads(raw_val)
+                except (json.JSONDecodeError, TypeError):
+                    return raw_val  # Если не JSON, возвращаем как есть
+        except Exception as e:
+            logger.error(f"DB KV Read error: {e}")
             return default
 
     # --- TELEGRAM OUTBOX ---
