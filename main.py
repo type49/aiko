@@ -1,6 +1,7 @@
 import os
 import tempfile
 
+from ui.notifications import PopupNotification
 from utils.audio_player import audio_manager
 startup_channel = audio_manager.play.first_startup(volume=1.0, ignore_master=True)
 from filelock import FileLock, Timeout
@@ -43,7 +44,13 @@ if __name__ == "__main__":
     app.setQuitOnLastWindowClosed(False)
 
     ctx = AikoContext()
+    notifications = PopupNotification()
 
+    # 2. Регистрируем его в логгере
+    from utils.logger import register_ui_logger
+
+    register_ui_logger(notifications)
+    ctx.ui_manager = notifications
     # Регистрируем контекст глобально
     set_global_context(ctx)
 
@@ -51,6 +58,7 @@ if __name__ == "__main__":
     tg_service = AikoTelegramService(ctx, core)
 
     aiko_gui = AikoApp(ctx, core)
+
 
     threading.Thread(target=run_telegram, args=(tg_service,), daemon=True, name="TGThread").start()
 

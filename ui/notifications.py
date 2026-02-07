@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QFrame, QLabel,
     QGraphicsOpacityEffect, QApplication, QHBoxLayout
 )
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QPoint, QObject, QEasingCurve, Property
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QPoint, QObject, QEasingCurve, Property, Signal
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import QGraphicsBlurEffect
 from PySide6.QtMultimedia import QSoundEffect
@@ -270,10 +270,20 @@ class ToastItem(QWidget):
         self.hide_slide_anim.finished.connect(self._destroy)
 
     def _play_sound(self):
-        """Воспроизведение звука"""
-        colors = ToastStyles.get_colors(self.msg_type, self.priority)
-        sound_file = colors.get("sound")
-        audio_manager.play.notify()
+        """Воспроизведение звука с защитой от бесконечного цикла"""
+        # 1. Если это ошибка — молчим. Безопасность превыше всего.
+        if self.msg_type == "error" or self.priority == "critical":
+            return
+
+        # 2. Пытаемся проиграть звук уведомления
+        try:
+            # Используем проверку существования файла в самом аудио-менеджере,
+            # но здесь просто глушим ошибку.
+            audio_manager.play.notify()
+        except Exception:
+            # Печатаем в консоль напрямую.
+            # НЕ ВЫЗЫВАЙ logger.error здесь, иначе снова пойдет рекурсия!
+            print("LOG: [Toast] Notification sound file missing, skipping sound.")
 
     def reposition(self, index: int, animated: bool = False):
         """Установка позиции тоста"""
@@ -372,13 +382,14 @@ class ToastItem(QWidget):
 
 class PopupNotification(QObject):
     """Менеджер уведомлений"""
-
+    _request_toast = Signal(str, str, object, object)
     def __init__(self, config: Optional[ToastConfig] = None):
         super().__init__()
         self.config = config or ToastConfig()
         self.active_toasts = []
         self._filters = []
         self._click_handlers = {}  # type -> handler
+        self._request_toast.connect(self._internal_create_toast)
 
     def add_filter(self, filter_func: Callable[[str], bool]):
         """Добавить фильтр для игнорирования уведомлений"""
@@ -396,7 +407,31 @@ class PopupNotification(QObject):
         if any(f(text) for f in self._filters):
             return
 
-        # 2. Создание тоста с пробросом lifetime
+        # # 2. Создание тоста с пробросом lifetime
+        # toast = ToastItem(
+        #     text=text,
+        #     msg_type=msg_type,
+        #     priority=priority,
+        #     config=self.config,
+        #     manager=self,
+        #     lifetime=lifetime
+        # )
+        #
+        # # 3. Добавление в начало списка.
+        # # Новые уведомления будут иметь индекс 0 и рисоваться в самой нижней позиции.
+        # self.active_toasts.insert(0, toast)
+        #
+        # # 4. Сначала рассчитываем позиции для всех, потом показываем новый
+        # self._reposition_all(animated=True)
+        # toast.show_toast()
+        self._request_toast.emit(text, msg_type, priority, lifetime)
+
+    def _internal_create_toast(self, text, msg_type, priority, lifetime):
+        """
+        ОПАСНЫЙ метод. Работает ТОЛЬКО в GUI-потоке.
+        Сюда мы попадаем через сигнал.
+        """
+        # 4. Вот теперь создаем виджет — это безопасно, т.к. сигнал перенес нас в GUI-поток
         toast = ToastItem(
             text=text,
             msg_type=msg_type,
@@ -406,11 +441,7 @@ class PopupNotification(QObject):
             lifetime=lifetime
         )
 
-        # 3. Добавление в начало списка.
-        # Новые уведомления будут иметь индекс 0 и рисоваться в самой нижней позиции.
         self.active_toasts.insert(0, toast)
-
-        # 4. Сначала рассчитываем позиции для всех, потом показываем новый
         self._reposition_all(animated=True)
         toast.show_toast()
 
@@ -468,7 +499,7 @@ if __name__ == "__main__":
     notifications.add_item("Простое уведомление", "info")
     notifications.add_item("Успешно выполнено", "success", lifetime=2000)
     notifications.add_item("Внимание!", "info", priority="warning")
-    notifications.add_item("Критическая ошибка!", "error", priority="critical")
+    notifications.add_item("Критическая ошибка!", "error")
     notifications.add_item("Команда выполнена", "cmd", priority="critical", lifetime=0)
 
     app.exec()
