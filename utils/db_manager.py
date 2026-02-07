@@ -7,49 +7,59 @@ from utils.logger import logger
 
 
 class DBManager:
+    """
+    Отказоустойчивое хранилище данных.
+    Реализует паттерны: Integrity Guard (контроль целостности) и
+    Outbox (очередь сообщений для внешних сервисов).
+    """
+
     def __init__(self, db_path="aiko_data.db"):
         self.db_path = db_path
         self.is_functional = False
         self.was_recovered = False
-        self.on_error_callback = None  # Сюда GUI подпишет функцию вывода HUD
+        self.on_error_callback = None
         self._init_db()
 
     def _init_db(self):
-        """Инициализация с проверкой целостности"""
+        """Проверка физического состояния и инициализация схем."""
         try:
             if os.path.exists(self.db_path):
                 with sqlite3.connect(self.db_path) as conn:
-                    # Проверка файла на физическое повреждение
+                    # Быстрая проверка на повреждение структуры файла
                     res = conn.execute("PRAGMA integrity_check").fetchone()
                     if res[0] != "ok":
                         raise sqlite3.DatabaseError("Integrity check failed")
 
+                    # Перевод в режим WAL для стабильной многопоточности
+                    conn.execute("PRAGMA journal_mode=WAL")
+
             self._create_tables()
             self.is_functional = True
-            logger.info("БД: Система инициализирована корректно.")
+            logger.info("DB: Система запущена в штатном режиме (WAL enabled).")
         except (sqlite3.DatabaseError, sqlite3.OperationalError) as e:
-            logger.error(f"БД: Обнаружено повреждение при старте: {e}")
+            logger.error(f"DB: Обнаружено повреждение базы: {e}")
             self._handle_corruption()
 
     def _handle_corruption(self):
-        """Изоляция битого файла и создание нового (Fix for AK-SYS-02)"""
+        """Изоляция поврежденного файла и горячая замена (AK-SYS-02)."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = f"{self.db_path}.corrupt_{timestamp}"
         try:
             if os.path.exists(self.db_path):
                 shutil.move(self.db_path, backup_path)
-                logger.warning(f"БД: Поврежденный файл перемещен в {backup_path}")
+                logger.warning(f"DB: Поврежденный файл изолирован -> {backup_path}")
 
             self._create_tables()
-            self.is_functional = True
-            self.was_recovered = True
-            logger.info("БД: Создана чистая база данных.")
+            self.is_functional, self.was_recovered = True, True
+            logger.info("DB: Развернута чистая структура таблиц.")
         except Exception as e:
             self.is_functional = False
-            logger.critical(f"БД: Тотальный сбой файловой системы: {e}")
+            logger.critical(f"DB: Фатальный сбой ФС при восстановлении: {e}")
 
     def _create_tables(self):
+        """Создание схемы данных."""
         with sqlite3.connect(self.db_path) as conn:
+            # Планировщик задач (Reminders, Timers)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS scheduler (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,53 +69,56 @@ class DBManager:
                     status TEXT DEFAULT 'pending'
                 )
             """)
+            # Постоянное хранилище настроек плагинов
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS kv_store (
                     key TEXT PRIMARY KEY,
                     value TEXT
                 )
             """)
+            # Очередь исходящих для Telegram (Pattern: Transactional Outbox)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS tg_outbox (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     message TEXT NOT NULL,
                     priority INTEGER DEFAULT 0,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME,
                     status TEXT DEFAULT 'pending'
                 )
             """)
             conn.commit()
 
+    # --- SHARED HELPERS ---
+
     def _report_runtime_error(self, error):
-        """Оповещение системы о сбое в реальном времени (Fix for AK-SYS-04)"""
-        msg = f"Критический сбой БД во время работы: {error}"
-        logger.error(msg)
+        msg = f"Runtime DB Error: {error}"
+        logger.error(msg, exc_info=True)
         if self.on_error_callback:
             self.on_error_callback(msg)
-        self.is_functional = False
 
-    # --- РАБОТА С ПЛАНИРОВЩИКОМ ---
+    def _to_json(self, data):
+        return json.dumps(data, ensure_ascii=False) if isinstance(data, (dict, list)) else data
+
+    # --- SCHEDULER ---
+
     def add_task(self, task_type, payload, exec_at):
         if not self.is_functional: return False
         try:
-            if isinstance(payload, dict):
-                payload = json.dumps(payload, ensure_ascii=False)
-
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute(
                     "INSERT INTO scheduler (type, payload, exec_at) VALUES (?, ?, ?)",
-                    (task_type, payload, exec_at)
+                    (task_type, self._to_json(payload), exec_at)
                 )
             return True
         except Exception as e:
-            self._report_runtime_error(e)
+            self._report_runtime_error(e);
             return False
 
     def get_pending_tasks(self):
         if not self.is_functional: return []
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite3.connect(self.db_path, timeout=10) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT id, type, payload FROM scheduler WHERE exec_at <= ? AND status = 'pending'",
@@ -113,7 +126,7 @@ class DBManager:
                 )
                 return cursor.fetchall()
         except Exception as e:
-            self._report_runtime_error(e)
+            self._report_runtime_error(e);
             return []
 
     def update_task_status(self, task_id, status='done'):
@@ -124,13 +137,14 @@ class DBManager:
         except Exception as e:
             self._report_runtime_error(e)
 
-    # --- KEY-VALUE STORE ---
+    # --- KV STORE ---
+
     def set_val(self, key, value):
         if not self.is_functional: return
         try:
-            val_str = json.dumps(value, ensure_ascii=False)
             with sqlite3.connect(self.db_path) as conn:
-                conn.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", (key, val_str))
+                conn.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)",
+                             (key, self._to_json(value)))
         except Exception as e:
             self._report_runtime_error(e)
 
@@ -138,20 +152,15 @@ class DBManager:
         if not self.is_functional: return default
         try:
             with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT value FROM kv_store WHERE key = ?", (key,))
-                row = cursor.fetchone()
+                row = conn.execute("SELECT value FROM kv_store WHERE key = ?", (key,)).fetchone()
                 return json.loads(row[0]) if row else default
-        except Exception as e:
-            # Здесь не репортим в HUD, чтобы не спамить при пустых запросах
+        except:
             return default
 
-    # TELEGRAM
+    # --- TELEGRAM OUTBOX ---
 
-    # Методы для управления очередью
-    # В методе add_tg_message
     def add_tg_message(self, text, priority=0):
-        # Генерируем локальное время в Python
+        if not self.is_functional: return False
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
             with sqlite3.connect(self.db_path) as conn:
@@ -161,52 +170,41 @@ class DBManager:
                 )
             return True
         except Exception as e:
-            logger.error(f"DB: Error {e}")
+            logger.error(f"DB Outbox Error: {e}");
             return False
 
     def get_pending_tg_messages(self):
         if not self.is_functional: return []
         try:
             with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                # Берем старые сообщения первыми (Strict Ordering)
-                cursor.execute("SELECT id, message, created_at FROM tg_outbox WHERE status = 'pending' ORDER BY id ASC")
-                return cursor.fetchall()
+                return conn.execute(
+                    "SELECT id, message, created_at FROM tg_outbox WHERE status = 'pending' ORDER BY id ASC"
+                ).fetchall()
         except Exception as e:
-            logger.error(f"DB: Ошибка чтения ТГ-очереди: {e}")
+            logger.error(f"DB: Error reading TG queue: {e}");
             return []
 
     def mark_tg_sent(self, msg_id):
+        """Удаляет сообщение или переводит в архив (Status Change)."""
         if not self.is_functional: return
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("DELETE FROM tg_outbox WHERE id = ?", (msg_id,))  # Или меняй статус на 'sent'
-
-    def get_all_scheduler_tasks(self):
-        """Возвращает все активные задачи для Менеджера"""
-        if not self.is_functional: return []
         try:
             with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                # Берем только pending, чтобы не забивать список историей
-                cursor.execute(
-                    "SELECT id, payload, exec_at, type FROM scheduler WHERE status = 'pending' ORDER BY exec_at ASC"
-                )
-                return cursor.fetchall()
+                # В твоей версии удаление — это ок для экономии места,
+                # но для отладки лучше сменить статус
+                conn.execute("DELETE FROM tg_outbox WHERE id = ?", (msg_id,))
         except Exception as e:
-            self._report_runtime_error(e)
-            return []
+            logger.error(f"DB: Sent mark error: {e}")
 
     def delete_task(self, task_id):
-        """Принудительное удаление задачи из БД"""
         if not self.is_functional: return False
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute("DELETE FROM scheduler WHERE id = ?", (task_id,))
-                conn.commit()
-            logger.info(f"БД: Задача ID {task_id} удалена.")
             return True
         except Exception as e:
-            self._report_runtime_error(e)
+            self._report_runtime_error(e);
             return False
 
+
+# Глобальный инстанс
 db = DBManager()

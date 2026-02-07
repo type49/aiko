@@ -42,12 +42,15 @@ class FocusManager(AikoCommand):
         # Если фраза больше похожа на команду ОСТАНОВКИ
         if score_stop > score_start and match_stop:
             if not self.is_active:
-                ctx.ui_log("Режим концентрации и так выключен.", "info")
+                ctx.ui_output("Режим концентрации и так выключен.", "info")
                 return True
 
             self.is_active = False
-            ctx.ui_log("Режим концентрации ВЫКЛЮЧЕН. Свобода.", "info")
+
+
+            ctx.ui_output("Режим концентрации ВЫКЛЮЧЕН. Свобода.", "info")
             logger.info(f"FocusManager: Деактивация через '{match_stop}' ({score_stop}%)")
+
             return True
 
         # 3. Если фраза больше похожа на команду ЗАПУСКА
@@ -57,7 +60,7 @@ class FocusManager(AikoCommand):
                 return True
 
             self.is_active = True
-            ctx.ui_log("РЕЖИМ КОНЦЕНТРАЦИИ АКТИВИРОВАН. Я слежу.", "error")
+            ctx.ui_output("РЕЖИМ КОНЦЕНТРАЦИИ АКТИВИРОВАН. Я слежу.", "error")
             # ПРОВЕРЬ ПУТЬ: он должен соответствовать структуре твоего проекта
             audio_manager.play("assets/sound/system/alarm.wav", volume=0.3)
             logger.info(f"FocusManager: Активация через '{match_start}' ({score_start}%)")
@@ -93,6 +96,6 @@ class FocusManager(AikoCommand):
 
     def _punish(self, ctx, site):
         """Метод наказания при обнаружении отвлекающих факторов"""
-        ctx.ui_log(f"ВЕРНИСЬ К РАБОТЕ! {site.upper()} под запретом.", "error")
+        ctx.ui_output(f"ВЕРНИСЬ К РАБОТЕ! {site.upper()} под запретом.", "error")
         # Повышаем громкость для наказания
         audio_manager.play("assets/sound/system/alarm.wav", volume=0.6)

@@ -1,15 +1,17 @@
+from utils.audio_player import audio_manager
+startup_channel = audio_manager.play.first_startup(volume=1.0, ignore_master=True)
+
 import asyncio
-import atexit
 import sys
 import threading
 
 from PySide6.QtWidgets import QApplication
 
-from aiko_core import AikoContext, AikoCore
+from aiko_core import AikoCore
 from aiko_gui import AikoApp
+from core.context import AikoContext
 from services.telegram.bot import AikoTelegramService
-from utils.lifecycle import lifecycle
-from utils.logger import logger
+from core.global_context import set_global_context
 
 
 def run_telegram(tg_service):
@@ -23,6 +25,10 @@ if __name__ == "__main__":
     app.setQuitOnLastWindowClosed(False)
 
     ctx = AikoContext()
+
+    # Регистрируем контекст глобально
+    set_global_context(ctx)
+
     core = AikoCore(ctx)
     tg_service = AikoTelegramService(ctx, core)
 
@@ -32,4 +38,9 @@ if __name__ == "__main__":
 
     threading.Thread(target=core.run, daemon=True, name="CoreThread").start()
 
-    sys.exit(app.exec())
+    audio_manager.play.second_startup(volume=0.5, ignore_master=True)
+    if startup_channel:
+        startup_channel.fadeout(1000)
+    ctx.broadcast('Готова к работе', to_all=True)
+
+sys.exit(app.exec())

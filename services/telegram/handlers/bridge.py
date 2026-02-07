@@ -35,8 +35,7 @@ def register_bridge_handlers(dp: Dispatcher, ctx, core):
         ctx.set_input_source("tg")
 
         # Пытаемся выполнить логику
-        success = core.process_logic(user_text.lower())
-
+        success = core.router.route(user_text.lower(), ctx)
         # Если плагины промолчали (не сработал мэтчер) — уведомляем пользователя
         if not success:
             # Используем ctx.reply вместо прямого message.reply для единообразия логов

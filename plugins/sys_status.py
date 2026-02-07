@@ -7,10 +7,26 @@ from utils.matcher import CommandMatcher
 from utils.logger import logger
 from utils.config_manager import aiko_cfg
 
+
 class SystemStatusCommand(AikoCommand):
     def __init__(self):
-        self.trigger = "диагностика системы"
+        super().__init__()
+        self.type = "sysstatus"
+
+        self.triggers = [
+            "состояние системы",
+            "диагностика системы",
+            "статус системы"
+        ]
+
+        self.samples = [
+            "состояние системы",
+            "диагностика системы",
+            "статус системы"
+        ]
+
         self.start_time = time.time()
+
         logger.info("SystemStatusCommand: Инициализирован.")
 
     def get_report(self, ctx):
@@ -24,10 +40,9 @@ class SystemStatusCommand(AikoCommand):
         vol = int(aiko_cfg.get("audio.master_volume", 0) * 100)
         mic_id = aiko_cfg.get("audio.device_index", "N/A")
 
-        # Добавим форматирование для Telegram (моноширинный шрифт через `...`)
         report = (
             f"🛠 **ДИАГНОСТИКА AIKO**\n"
-            f"`--------------------------` \n"
+            f"`--------------------------`\n"
             f"👤 Имя: {aiko_cfg.get('bot.name')} | ⏱ Uptime: {uptime}\n"
             f"🔊 Vol: {vol}% | 🎤 Mic: {mic_id}\n"
             f"💾 RAM: {mem_mb:.1f} MB (Sys: {total_ram}%)\n"
@@ -38,14 +53,17 @@ class SystemStatusCommand(AikoCommand):
         return report
 
     def execute(self, text: str, ctx) -> bool:
-        match, score = CommandMatcher.extract(text, [self.trigger], threshold=70, partial=True)
+        # logger.debug(f"DEBUG_STATUS: Входной текст: '{text}' | Триггеры: {self.triggers}")
+        # match, score = CommandMatcher.extract(
+        #     text,
+        #     self.triggers,
+        #     threshold=70,
+        #     partial=True
+        # )
+        #
+        # if match:
+        #     logger.info(f"SystemStatusCommand: Сработал триггер '{match}' (score: {score})")
+        full_report = self.get_report(ctx)
+        ctx.reply(full_report, to_all=False)
+        return True
 
-        if match:
-            full_report = self.get_report(ctx)
-            # УМНЫЙ ОТВЕТ: Айко сама поймет, куда слать — в консоль, в HUD или в Телеге ответить.
-            # Если хочешь, чтобы диагностика ВСЕГДА дублировалась в телегу (даже при голосовом вызове),
-            # поставь to_all=True
-            ctx.reply(full_report, to_all=False)
-            return True
-
-        return False

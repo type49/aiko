@@ -1,221 +1,187 @@
-import json
 import time
 import threading
-import importlib.util
 import queue
-from pathlib import Path
-from vosk import Model, KaldiRecognizer
-
-from interfaces import AikoCommand
-from utils.db_manager import db
 from utils.logger import logger
-from utils.audio_handler import AudioHandler
-from utils.matcher import CommandMatcher
-from utils.config_manager import aiko_cfg
-
-
-class AikoContext:
-    """Объект состояния системы. Передается между Ядром, GUI и Плагинами."""
-
-    def __init__(self):
-        # --- Состояние работы ---
-        self.is_running = True
-        self.state = "init"  # idle, active, blocked, error
-        self.last_input_source = "mic"  # mic, tg, gui
-
-        # --- Настройки аудио (Прямые атрибуты для Core) ---
-        self.mic_active = True
-        self.device_id = aiko_cfg.get("audio.device_id", 1)
-        self.active_window = aiko_cfg.get("trigger.active_window", 5.0)
-        self.last_activation_time = 0
-
-        # --- Пути и ресурсы ---
-        self.model_path = Path("models/small/vosk-model-small-ru-0.22")
-        self.commands = []
-        self.tg_chat_id = aiko_cfg.get("telegram.chat_id")
-
-        # --- Коллбэки для UI (Группировка для чистоты) ---
-        # Инициализируются в AikoApp через сигналы
-        self.ui_log = lambda text, level="info": None
-        self.ui_status = lambda status: None
-        self.ui_audio_status = lambda is_ok, msg: None
-        self.ui_show_alarm = None
-        self.ui_open_reminder = lambda text: None
-
-    def set_input_source(self, source):
-        if source in ["mic", "tg", "gui"]:
-            self.last_input_source = source
-
-    def broadcast(self, text, level="info"):
-        """Системное вещание во все каналы"""
-        logger.info(f"BROADCAST: {text}")
-        if self.ui_log:
-            self.ui_log(text, level)
-
-        # Ленивый импорт базы, чтобы избежать циклической зависимости
-        from utils.db_manager import db
-        db.add_tg_message(f"📢 {text}")
-
-    def reply(self, text, level="info", to_all=False):
-        """Универсальный ответ в зависимости от источника ввода"""
-        logger.info(f"REPLY [{self.last_input_source}]: {text}")
-
-        if self.last_input_source != "tg" or to_all:
-            if self.ui_log:
-                self.ui_log(text, level)
-
-        if self.last_input_source == "tg" or to_all:
-            from utils.db_manager import db
-            db.add_tg_message(text)
-
+from core.audio_handler import AudioHandler
+from core.plugin_loader import PluginLoader
+from utils.Intent_сlassifier import IntentClassifier
+from core.activation_service import ActivationService
+from core.scheduler import TaskScheduler
+from core.plugin_router import CommandRouter
+from core.stt import STTService
 
 
 class AikoCore:
-    def __init__(self, ctx=None):
-        self.ctx = ctx or AikoContext()
-        logger.info("Core: Инициализация ядра...")
+    """
+    Финальная версия Core.
+    Один класс. Управляемый lifecycle. Без архитектурного долга.
+    """
 
-        self._stt_model = None
-        self._stt_rec = None
+    MAX_RESTARTS = 3
+    RESTART_COOLDOWN = 5  # сек
 
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.stop_event = threading.Event()
+
+        self.threads = {}
+        self.restart_counters = {}
+
+        logger.info("Core: Инициализация...")
+
+        # --- Подсистемы ---
         self.audio = AudioHandler(
             device_id=self.ctx.device_id,
-            on_status_change=lambda is_ok, msg: self.ctx.ui_audio_status(is_ok, msg)
+            on_status_change=self.ctx.ui_audio_status
         )
 
-        self.stop_event = threading.Event()
-        self._load_plugins()
+        self.stt = STTService(self.ctx.model_path)
+        self.activation = ActivationService(self.ctx)
 
-        self.scheduler_active = True
-        threading.Thread(target=self._scheduler_loop, daemon=True, name="Scheduler").start()
+        cmds, intent_map, fallbacks = PluginLoader.load_all()
+        self.ctx.commands = cmds
 
-    @property
-    def stt(self):
-        if self._stt_rec is None:
-            if not self.ctx.model_path.exists():
-                logger.critical(f"Core: Модель не найдена: {self.ctx.model_path}")
-                raise FileNotFoundError("Vosk model missing")
+        nlu = IntentClassifier()
+        nlu.train(cmds)
 
-            logger.info("Core: Загрузка STT модели в память...")
-            self._stt_model = Model(str(self.ctx.model_path))
-            self._stt_rec = KaldiRecognizer(self._stt_model, 16000)
-            logger.info("Core: STT модель готова.")
-        return self._stt_rec
+        self.router = CommandRouter(nlu, intent_map, fallbacks)
+        self.scheduler = TaskScheduler(self.ctx)
 
-    def _load_plugins(self):
-        plugins_dir = Path("commands")
-        plugins_dir.mkdir(exist_ok=True)
-        for file in plugins_dir.glob("*.py"):
-            if file.name == "__init__.py": continue
-            try:
-                spec = importlib.util.spec_from_file_location(file.stem, file)
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                for attr in dir(module):
-                    obj = getattr(module, attr)
-                    if isinstance(obj, type) and issubclass(obj, AikoCommand) and obj is not AikoCommand:
-                        self.ctx.commands.append(obj())
-                        logger.debug(f"Core: Загружен плагин: {attr}")
-            except Exception as e:
-                logger.error(f"Core: Ошибка загрузки плагина {file.name}: {e}")
+        logger.info("Core: Готово.")
 
-    def set_state(self, new_state):
-        if self.ctx.state != new_state:
-            logger.info(f"Core: Состояние {self.ctx.state} -> {new_state}")
-            self.ctx.state = new_state
-            if callable(self.ctx.ui_status):
-                self.ctx.ui_status(new_state)
+    # =========================
+    # Lifecycle
+    # =========================
 
     def run(self):
-        """Основной поток: координация аудио-захвата и распознавания."""
-        # Запуск захвата звука в отдельном потоке
-        threading.Thread(target=self.audio.listen, args=(self.stop_event,), daemon=True, name="AudioIn").start()
-        logger.info("Core: Поток захвата запущен. Ожидание данных...")
+        logger.info("Core: Запуск системы.")
 
-        while self.ctx.is_running:
-            self._check_activation_timeout()
+        self._start_thread(
+            name="AudioIn",
+            target=self.audio.listen,
+            args=(self.stop_event,)
+        )
 
-            try:
-                # Получаем чанк аудио из очереди (блокировка 0.2с чтобы не грузить CPU)
-                data = self.audio.audio_q.get(timeout=0.2)
+        self.scheduler.start()
 
-                if self.stt.AcceptWaveform(data):
-                    res = json.loads(self.stt.Result()).get('text', '')
-                    if res:
-                        self._process_phrase(res)
+        try:
+            while not self.stop_event.is_set():
+                self._monitor_health()
+                self.activation.handle_timeouts(self.set_state)
 
-            except queue.Empty:
-                continue
-            except Exception as e:
-                logger.error(f"Core: Ошибка в цикле обработки: {e}")
-                continue
+                try:
+                    data = self.audio.audio_q.get(timeout=0.2)
+                    phrase = self.stt.get_phrase(data)
 
-    def _process_phrase(self, text):
-        """Диспетчер распознанного текста"""
-        logger.debug(f"Core: Распознано -> {text}")
+                    if phrase:
+                        self._on_phrase_detected(phrase)
 
-        is_trig, cmd_text = self._check_trigger(text)
-        in_win = self._is_in_active_window()
+                except queue.Empty:
+                    continue
 
-        if is_trig:
-            self._handle_command(cmd_text or "", source="mic", set_active=True)
-        elif in_win:
-            self._handle_command(text, source="mic", set_active=False)
+        except KeyboardInterrupt:
+            logger.warning("Core: Остановка по Ctrl+C")
+        except Exception:
+            logger.critical("Core: Фатальный сбой", exc_info=True)
+        finally:
+            self.shutdown()
 
-    def _handle_command(self, text, source="mic", set_active=False):
-        """Выполнение логики и управление состоянием"""
-        self.ctx.set_input_source(source)
+    def shutdown(self):
+        logger.info("Core: Shutdown...")
 
-        if set_active:
+        self.stop_event.set()
+
+        if self.scheduler:
+            self.scheduler.stop()
+
+        for name, t in self.threads.items():
+            if t.is_alive():
+                logger.debug(f"Core: Ожидание {name}")
+                t.join(timeout=2)
+
+        logger.info("Core: Остановлен корректно.")
+
+    # =========================
+    # Threads & Health
+    # =========================
+
+    def _start_thread(self, name, target, args=(), daemon=True):
+        t = threading.Thread(
+            name=name,
+            target=target,
+            args=args,
+            daemon=daemon
+        )
+        t.start()
+        self.threads[name] = t
+        logger.debug(f"Core: Поток {name} запущен")
+
+    def _monitor_health(self):
+        for name, t in list(self.threads.items()):
+            if not t.is_alive() and not self.stop_event.is_set():
+                self._handle_thread_failure(name)
+
+    def _handle_thread_failure(self, name):
+        count = self.restart_counters.get(name, 0)
+
+        if count >= self.MAX_RESTARTS:
+            logger.critical(
+                f"Health: Поток {name} упал {count} раз. Остановка системы."
+            )
+            self.stop_event.set()
+            return
+
+        logger.warning(
+            f"Health: Поток {name} упал. Перезапуск {count + 1}/{self.MAX_RESTARTS}"
+        )
+
+        self.restart_counters[name] = count + 1
+        time.sleep(self.RESTART_COOLDOWN)
+
+        if name == "AudioIn":
+            self._start_thread(
+                name="AudioIn",
+                target=self.audio.listen,
+                args=(self.stop_event,)
+            )
+
+    # =========================
+    # Logic
+    # =========================
+
+    def _on_phrase_detected(self, text: str):
+        should_exec, clean_text = self.activation.check(text)
+
+        if not should_exec:
+            return
+
+        self.ctx.set_input_source("mic")
+        name_triggered = (clean_text != text)
+
+        if name_triggered:
             self.set_state("active")
-            self.ctx.last_activation_time = time.time()
-            logger.info(f"Core: Активация триггером -> '{text}'")
+            # --- НОВАЯ ПРОВЕРКА ---
+            if not clean_text.strip():
+                logger.info("Core: Получена пустая активация (имя без команды). Ожидаю ввод...")
+                self.activation.refresh_activation()
+                # Здесь можно вызвать self.ctx.reply("Слушаю") или пискнуть
+                return
+                # ----------------------
 
-        if text.strip():
-            if self.process_logic(text):
-                # Если команда успешно выполнена — закрываем окно ожидания
-                self.ctx.last_activation_time = 0
-                self.set_state("idle")
+        executed = self.router.route(clean_text, self.ctx)
 
-    def process_logic(self, text):
-        """Проход по плагинам."""
-        for cmd in self.ctx.commands:
-            try:
-                if cmd.execute(text, self.ctx):
-                    logger.info(f"Core: Плагин {cmd.__class__.__name__} выполнил задачу.")
-                    return True
-            except Exception as e:
-                logger.error(f"Core: Ошибка в плагине {cmd.__class__.__name__}: {e}")
-        return False
+        if executed:
+            self.activation.extend_post_command_window()
+        elif name_triggered:
+            self.activation.refresh_activation()
 
-    def _check_trigger(self, text):
-        main_name = aiko_cfg.get("bot.name", "айко").lower()
-        threshold = aiko_cfg.get("audio.match_threshold", 80)
-        return CommandMatcher.check_trigger(text, [main_name], threshold)
+    # =========================
+    # UI State
+    # =========================
 
-    def _is_in_active_window(self):
-        return (time.time() - self.ctx.last_activation_time) < self.ctx.active_window
-
-    def _check_activation_timeout(self):
-        if not self._is_in_active_window() and self.ctx.state == "active":
-            self.set_state("idle")
-
-    def _scheduler_loop(self):
-        """Планировщик теперь тоже 'холодный' — просто дергает базу и плагины."""
-        while self.scheduler_active and self.ctx.is_running:
-            try:
-                tasks = db.get_pending_tasks()
-                for t_id, t_type, t_payload in tasks:
-                    for cmd in self.ctx.commands:
-                        if hasattr(cmd, 'on_schedule') and t_type == getattr(cmd, 'type', ''):
-                            cmd.on_schedule(t_payload, self.ctx)
-                    db.update_task_status(t_id, 'done')
-            except Exception as e:
-                logger.error(f"Core: Ошибка планировщика: {e}")
-            time.sleep(5)
-
-    def restart_audio_capture(self):
-        new_device_id = aiko_cfg.get("audio.device_id", 1)
-        self.ctx.device_id = new_device_id
-        if self.audio:
-            self.audio.restart(new_device_id)
+    def set_state(self, new_state: str):
+        if self.ctx.state != new_state:
+            logger.debug(f"Core: state {self.ctx.state} → {new_state}")
+            self.ctx.state = new_state
+            if self.ctx.ui_status:
+                self.ctx.ui_status(new_state)

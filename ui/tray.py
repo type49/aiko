@@ -13,8 +13,19 @@ class AikoTray(QSystemTrayIcon):
 
     def _init_menu(self):
         menu = QMenu()
-        menu.addAction("Менеджер напоминалок", self.app.show_reminder_manager)
-        menu.addAction("Настройки", self.app.show_settings)
+
+        menu.addAction("Тест Статистики", lambda: self.app.ctx.open_ui(
+            "stats_window",  # Имя файла
+            "v1.0.4",  # arg[0]
+            "Active",  # arg[1]
+            cpu="12%",  # kwarg: cpu
+            ram="4.2GB",  # kwarg: ram
+            temp=45,  # kwarg: temp
+            status="Normal"  # kwarg: status
+        ))
+        menu.addAction("Настройки", lambda: self.app.ctx.open_ui("settings_window"))
+        menu.addAction("Задачи", lambda: self.app.ctx.open_ui("reminder"))
+
         menu.addSeparator()
         menu.addAction("Выход", self.app.quit_app)
         self.setContextMenu(menu)

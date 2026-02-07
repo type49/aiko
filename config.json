@@ -4,11 +4,23 @@
         "samplerate": 16000,
         "match_threshold": 80,
         "device_index": 0,
-        "master_volume": 0.07
+        "master_volume": 0.05
+    },
+    "system_sound": {
+        "notify": "assets/sounds/system/notify_01.wav",
+        "error": "assets/sounds/system/error_01.wav",
+        "alarm": "assets/sounds/system/alarm_02.wav",
+        "message": "assets/sounds/system/message_01.wav",
+        "call": "assets/sounds/system/call_01.wav",
+        "complete": "assets/sounds/system/complete_01.wav",
+        "first_startup": "assets/sounds/system/startup.wav",
+        "second_startup": "assets/sounds/system/joi.wav",
+        "listen": "assets/sounds/system/listen.wav"
     },
     "telegram": {
         "token": "8114737883:AAGMnDFVstTCFoU2JcW8pg6eK485D3EXNFE",
-        "secret_phrase": "айко"
+        "secret_phrase": "айко",
+        "chat_id": "236360455"
     },
     "trigger": {
         "names": [
@@ -21,7 +33,8 @@
             "найко",
             "ай ко"
         ],
-        "active_window": 5.0
+        "active_window": 5.0,
+        "post_command_window": 3.0
     },
     "debug": {
         "log_commands": true,
@@ -29,5 +42,8 @@
     },
     "bot": {
         "name": "Айко"
+    },
+    "stt-model": {
+        "path": "models/small/vosk-model-small-ru-0.22"
     }
 }
