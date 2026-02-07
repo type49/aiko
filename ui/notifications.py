@@ -468,7 +468,7 @@ if __name__ == "__main__":
     notifications.add_item("Простое уведомление", "info")
     notifications.add_item("Успешно выполнено", "success", lifetime=2000)
     notifications.add_item("Внимание!", "info", priority="warning")
-    notifications.add_item("Критическая ошибка!", "error", priority="critical")
+    notifications.add_item("Критическая ошибка!", "error")
     notifications.add_item("Команда выполнена", "cmd", priority="critical", lifetime=0)
 
     app.exec()

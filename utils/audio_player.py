@@ -74,6 +74,7 @@ class AudioController:
 
             if not full_path.exists():
                 logger.error(f"AudioController: Файл не найден: {str_path}")
+                ctx().broadcast(f"AudioController: Файл не найден: {str_path}", level="error", ui=True)
                 return None
 
             if str_path not in self._sounds:
