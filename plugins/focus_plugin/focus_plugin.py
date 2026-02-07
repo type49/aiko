@@ -8,6 +8,7 @@ from utils.logger import logger
 
 class FocusManager(AikoCommand):
     def __init__(self):
+        super().__init__()  # Желательно добавить
         self.type = "focus_manager"
         self.is_active = False
         self.last_check_time = 0
@@ -88,7 +89,6 @@ class FocusManager(AikoCommand):
             # Поиск нарушителей в заголовке окна
             for d in self.distractors:
                 if d in title:
-                    logger.warning(f"FocusManager: Нарушение! Найдено '{d}' в окне '{title}'")
                     self._punish(ctx, d)
                     break
         except Exception as e:
@@ -98,4 +98,4 @@ class FocusManager(AikoCommand):
         """Метод наказания при обнаружении отвлекающих факторов"""
         ctx.ui_output(f"ВЕРНИСЬ К РАБОТЕ! {site.upper()} под запретом.", "error")
         # Повышаем громкость для наказания
-        audio_manager.play("assets/sound/system/alarm.wav", volume=0.6)
+        audio_manager.play.alarm()

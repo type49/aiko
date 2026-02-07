@@ -35,6 +35,7 @@ class CommandMatcher:
         'майка': 75,
         'эйко': 90,
         'райков': 70,
+        'а и ко': 70,
     }
 
     @staticmethod
