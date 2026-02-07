@@ -1,13 +1,16 @@
 import logging
 import sys
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
+# ============================================================
+# FORMATTERS
+# ============================================================
+
 class ColorFormatter(logging.Formatter):
     """Специальный форматтер для раскрашивания логов в консоли."""
-
-    # ANSI escape codes для цветов
     grey = "\x1b[38;20m"
     blue = "\x1b[34;20m"
     green = "\x1b[32;20m"
@@ -16,7 +19,6 @@ class ColorFormatter(logging.Formatter):
     bold_red = "\x1b[31;1m"
     reset = "\x1b[0m"
 
-    # Шаблон сообщения
     format_str = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     date_format = "%Y-%m-%d %H:%M:%S"
 
@@ -34,19 +36,67 @@ class ColorFormatter(logging.Formatter):
         return formatter.format(record)
 
 
+# ============================================================
+# UI HANDLER (SAFE & THROTTLED)
+# ============================================================
+
+class ToastHandler(logging.Handler):
+    """Потокобезопасный хэндлер с защитой от спама для Qt уведомлений."""
+
+    def __init__(self, notification_manager, interval=5.0):
+        super().__init__()
+        self.manager = notification_manager
+        self.interval = interval
+        self._last_messages = {}  # {msg: timestamp}
+        self._max_cache = 100
+
+    def emit(self, record):
+        try:
+            # Текст сообщения без системных метаданных для UI
+            msg = record.getMessage()
+            now = time.time()
+
+            # Дросселирование (Throttling) идентичных сообщений
+            if msg in self._last_messages:
+                if now - self._last_messages[msg] < self.interval:
+                    return
+
+            # Очистка кеша при переполнении
+            if len(self._last_messages) > self._max_cache:
+                self._last_messages.clear()
+
+            self._last_messages[msg] = now
+
+            # Отправка в менеджер (add_item уже защищен сигналом в PopupNotification)
+            if record.levelno >= logging.CRITICAL:
+                self.manager.add_item(msg, msg_type="error", priority="critical")
+            elif record.levelno >= logging.ERROR:
+                self.manager.add_item(msg, msg_type="error")
+            elif record.levelno >= logging.WARNING:
+                self.manager.add_item(msg, msg_type="info", priority="warning", lifetime=4000)
+
+        except Exception:
+            self.handleError(record)
+
+
+# ============================================================
+# SETUP FUNCTIONS
+# ============================================================
+
 def setup_logger(name="AIKO"):
+    """Инициализация базового логгера (Консоль + Файл)."""
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
 
-    # Стандартный форматтер для файла (без цветов)
-    file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s', '%Y-%m-%d %H:%M:%S')
+    if logger.hasHandlers():
+        logger.handlers.clear()
 
-    # 1. Лог в консоль (Цветной)
+    # 1. Console Handler
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(ColorFormatter())  # Используем наш новый класс
+    console_handler.setFormatter(ColorFormatter())
     console_handler.setLevel(logging.INFO)
 
-    # 2. Лог в файл (макс 5МБ, храним 3 последних)
+    # 2. File Handler
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     file_handler = RotatingFileHandler(
@@ -55,12 +105,10 @@ def setup_logger(name="AIKO"):
         backupCount=3,
         encoding='utf-8'
     )
-    file_handler.setFormatter(file_formatter)
+    file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s: %(message)s', '%Y-%m-%d %H:%M:%S'
+    ))
     file_handler.setLevel(logging.DEBUG)
-
-    # Очищаем старые хэндлеры, если они были (защита от дублирования при перезагрузке)
-    if logger.hasHandlers():
-        logger.handlers.clear()
 
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
@@ -68,5 +116,20 @@ def setup_logger(name="AIKO"):
     return logger
 
 
-# Создаем глобальный объект логгера
+def register_ui_logger(notification_manager):
+    """Связывает логгер с UI. Вызывать строго ПОСЛЕ инициализации PopupNotification."""
+    logger = logging.getLogger("AIKO")
+
+    ui_handler = ToastHandler(notification_manager)
+    ui_handler.setLevel(logging.WARNING)  # Ловим WARNING и выше
+
+    # Форматтер для UI (только суть, без дат)
+    ui_formatter = logging.Formatter('%(message)s')
+    ui_handler.setFormatter(ui_formatter)
+
+    logger.addHandler(ui_handler)
+    logger.info("UI Logger registered successfully.")
+
+
+# Глобальный объект для импорта
 logger = setup_logger()

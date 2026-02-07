@@ -20,9 +20,9 @@ class AikoApp(QObject):
 
 
         # 2. Компоненты (сначала создаем, потом биндим!)
-        from ui.notifications import PopupNotification
+
         from ui.tray import AikoTray
-        self.popup = PopupNotification()
+        self.popup = ctx.ui_manager
         self.tray = AikoTray(self)
 
         # 3. Настройка связей
