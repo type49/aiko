@@ -9,6 +9,10 @@ class AikoTray(QSystemTrayIcon):
         self.app = app_instance
         self._init_menu()
         self.update_icon("init")
+
+        # Подключаем сигнал клика по иконке
+        self.activated.connect(self.on_tray_activated)
+
         self.show()
 
     def _init_menu(self):
@@ -23,7 +27,7 @@ class AikoTray(QSystemTrayIcon):
             temp=45,  # kwarg: temp
             status="Normal"  # kwarg: status
         ))
-        menu.addAction("Настройки", lambda: self.app.ctx.open_ui("settings_window"))
+        menu.addAction("Главная", lambda: self.app.ctx.open_ui("aiko_window"))
         menu.addAction("Задачи", lambda: self.app.ctx.open_ui("reminder"))
 
         menu.addSeparator()
@@ -45,3 +49,7 @@ class AikoTray(QSystemTrayIcon):
         p.drawEllipse(12, 12, 40, 40)
         p.end()
         self.setIcon(QIcon(pixmap))
+
+    def on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.DoubleClick:
+            self.app.ctx.open_ui("aiko_window")

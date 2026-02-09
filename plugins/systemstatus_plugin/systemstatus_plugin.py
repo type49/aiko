@@ -64,6 +64,7 @@ class SystemStatusCommand(AikoCommand):
         # if match:
         #     logger.info(f"SystemStatusCommand: Сработал триггер '{match}' (score: {score})")
         full_report = self.get_report(ctx)
-        ctx.reply(full_report, to_all=False)
+        #ctx.reply(full_report, to_all=False)
+        ctx.reply('message', message=True)
         return True
 

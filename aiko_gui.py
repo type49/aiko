@@ -4,6 +4,7 @@ from typing import Dict, Optional
 from PySide6.QtWidgets import QApplication, QWidget
 from PySide6.QtCore import QObject, Qt, Slot
 from utils.logger import logger
+from ui.assistant_message import AikoMessages
 
 
 class AikoApp(QObject):
@@ -23,6 +24,8 @@ class AikoApp(QObject):
 
         from ui.tray import AikoTray
         self.popup = ctx.ui_manager
+        self.assistant_msg = AikoMessages()  # Менеджер сообщений ассистента
+
         self.tray = AikoTray(self)
 
         # 3. Настройка связей
@@ -100,7 +103,13 @@ class AikoApp(QObject):
             window_class = getattr(module, class_name)
 
             # Создаем окно без принудительного parent (чтобы не ломать твои __init__)
-            return window_class(*args, **kwargs)
+            window = window_class(*args, **kwargs)
+
+            # Передаем контекст для AikoWindow
+            if name == "aiko_window" and hasattr(self, 'ctx') and hasattr(self, 'core'):
+                window.set_context(self.ctx, self.core)
+
+            return window
         except Exception as e:
             logger.error(f"GUI: Ошибка сборки окна '{name}': {e}")
             return None
@@ -112,16 +121,18 @@ class AikoApp(QObject):
         window.destroyed.connect(lambda: self._windows.pop(name, None))
 
         window.show()
-        self._center_window(window)
         logger.debug(f"GUI: Окно {name} зарегистрировано. Активных окон: {len(self._windows)}")
 
-    def _center_window(self, widget: QWidget):
-        screen = QApplication.primaryScreen().availableGeometry()
-        widget.move((screen.width() - widget.width()) // 2, (screen.height() - widget.height()) // 2)
 
-    def _handle_ui_output(self, text, level="info", priority=None):
-        print("UI OUTPUT EMIT:", text, level, priority)
-        self.signals.display_message.emit(str(text), level, priority)
+    def _handle_ui_output(self, text, level="info", priority=None, message=False, duration=None):
+
+        if message:
+            # Центральное сообщение от ассистента
+            self.assistant_msg.show_message(str(text), duration)
+        else:
+            # Обычное уведомление сбоку
+            self.signals.display_message.emit(str(text), level, priority)
+
 
     def _handle_audio_status_change(self, is_ok, message):
         self.core.set_state("idle" if is_ok else "blocked")
