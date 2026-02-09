@@ -16,6 +16,7 @@ class AikoContext:
 
         # --- Менеджеры (Присваиваются в main.py) ---
         self.ui_manager = None  # PopupNotification instance
+        self.core = None  # Ссылка на AikoCore (для доступа к audio)
 
         # --- НОВОЕ: Централизованные состояния ---
         self.microphone_enabled = True  # Состояние микрофона
@@ -115,10 +116,11 @@ class AikoContext:
     def set_microphone_state(self, enabled: bool, source: str = "unknown"):
         """
         Централизованное управление микрофоном
+        Физически включает/выключает аудиопоток
 
         Args:
             enabled: True - включить, False - выключить
-            source: Источник команды (gui, voice, system)
+            source: Источник команды (gui, voice, system, hardware_conflict, audio_error)
         """
         if self.microphone_enabled == enabled:
             logger.debug(f"CTX: Микрофон уже в состоянии {enabled}, пропуск")
@@ -126,6 +128,19 @@ class AikoContext:
 
         self.microphone_enabled = enabled
         logger.info(f"CTX: Микрофон {'включен' if enabled else 'выключен'} [{source}]")
+
+        # ФИЗИЧЕСКОЕ управление потоком через core.audio
+        if self.core and hasattr(self.core, 'audio'):
+            if enabled:
+                # Включаем поток
+                success = self.core.audio.start_stream()
+                if not success:
+                    logger.error("CTX: Не удалось запустить аудиопоток")
+                    self.microphone_enabled = False  # Откатываем состояние
+                    return False
+            else:
+                # Выключаем поток
+                self.core.audio.stop_stream()
 
         # Обновляем UI статус
         if not enabled:
@@ -162,7 +177,7 @@ class AikoContext:
 
     # ========== СУЩЕСТВУЮЩИЕ МЕТОДЫ ==========
 
-    def ui_output(self, text: str, level: str = "info", priority: Optional[str] = None):
+    def ui_output(self, text: str, level: str = "info", priority: Optional[str] = None, message: bool = False, duration: int = None):
         """Централизованный вывод в UI уведомления."""
         if self.ui_manager:
             # Наш PopupNotification принимает msg_type, что логически равно level

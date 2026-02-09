@@ -20,10 +20,10 @@ class AudioNamespace:
                 # Возвращаем лямбду, которая теперь вернет объект Channel или None
                 return lambda **kwargs: self._controller._execute_play(path, **kwargs)
 
-            logger.warning(f"AudioController: Звук '{name}' не найден.")
+            logger.warning(f"AudioPlayer: Звук '{name}' не найден.")
             return lambda **kwargs: None
         except Exception as e:
-            logger.error(f"AudioController: Ошибка доступа к конфигу: {e}")
+            logger.error(f"AudioPlayer: Ошибка доступа к конфигу: {e}")
             return lambda **kwargs: None
 
     def __call__(self, relative_path, **kwargs):
@@ -51,9 +51,9 @@ class AudioController:
             self._sounds = {}
             self.play = AudioNamespace(self)
             self._initialized = True
-            logger.info("AudioController: Система инициализирована.")
+            logger.info("AudioPlayer: Система инициализирована.")
         except Exception as e:
-            logger.error(f"AudioController: Ошибка инициализации: {e}")
+            logger.error(f"AudioPlayer: Ошибка инициализации: {e}")
 
     def _execute_play(self, relative_path: str, volume=0.5, channel_id=None, ignore_master=False):
         """Возвращает объект Channel для управления запущенным звуком."""
@@ -73,7 +73,7 @@ class AudioController:
             str_path = str(full_path)
 
             if not full_path.exists():
-                logger.error(f"AudioController: Файл не найден: {str_path}")
+                logger.error(f"AudioPlayer: Файл не найден: {str_path}")
                 return None
 
             if str_path not in self._sounds:
@@ -92,7 +92,7 @@ class AudioController:
             return channel  # Теперь мы можем управлять этим звуком после старта
 
         except Exception as e:
-            logger.error(f"AudioController: Ошибка воспроизведения: {e}")
+            logger.error(f"AudioPlayer: Ошибка воспроизведения: {e}")
             return None
 
     def play_with_overlap(self, first_sound_func, second_sound_func, overlap_ms: int):

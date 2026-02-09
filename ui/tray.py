@@ -28,7 +28,7 @@ class AikoTray(QSystemTrayIcon):
         # Подписываемся на обновления UI статуса через ctx ПОСЛЕ show()
         self.app.ctx.register_ui_status_callback(self.update_icon)
 
-        logger.info("Tray: Инициализирован с автоматическим обновлением статуса")
+        logger.info("Tray: Инициализирован.")
 
     def _create_icon(self, status: str):
         """Создает и устанавливает иконку для заданного статуса"""

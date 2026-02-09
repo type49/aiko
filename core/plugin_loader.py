@@ -72,7 +72,7 @@ class PluginLoader:
             except Exception as e:
                 logger.error(f"Loader: Ошибка при загрузке {item.name}: {e}", exc_info=True)
 
-        logger.info(f"Всего загружено команд: {len(commands)}")
+        logger.info(f"Всего загружено плагинов: {len(commands)}")
         return commands, intent_map, fallbacks
 
     @staticmethod
@@ -89,9 +89,9 @@ class PluginLoader:
                         for trig in instance.triggers:
                             for word in trig.lower().split():
                                 intent_map.setdefault(word, []).append(instance)
-                        logger.debug(f"Зарегистрирована команда: {obj.__name__} с триггерами {instance.triggers}")
+                        logger.debug(f"Зарегистрирован плагин: {obj.__name__} с триггерами {instance.triggers}")
                     else:
                         fallbacks.append(instance)
-                        logger.debug(f"Зарегистрирована fallback команда: {obj.__name__}")
+                        logger.debug(f"Зарегистрирован fallback плагин: {obj.__name__}")
             except Exception as e:
                 logger.error(f"Ошибка при обработке атрибута {attr}: {e}")

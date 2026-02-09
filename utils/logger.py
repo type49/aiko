@@ -128,7 +128,6 @@ def register_ui_logger(notification_manager):
     ui_handler.setFormatter(ui_formatter)
 
     logger.addHandler(ui_handler)
-    logger.info("UI Logger registered successfully.")
 
 
 # Глобальный объект для импорта

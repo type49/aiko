@@ -36,7 +36,7 @@ class DBManager:
 
             self._create_tables()
             self.is_functional = True
-            logger.info("DB: Система запущена в штатном режиме (WAL enabled).")
+            logger.info("DB: База данных запущена.")
         except (sqlite3.DatabaseError, sqlite3.OperationalError) as e:
             logger.error(f"DB: Обнаружено повреждение базы: {e}")
             if conn:

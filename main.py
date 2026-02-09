@@ -38,7 +38,6 @@ def is_already_running():
 
 if __name__ == "__main__":
     if is_already_running():
-        print("⚠️ Айко уже запущена. Завершение дубликата.")
         sys.exit(0)
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)

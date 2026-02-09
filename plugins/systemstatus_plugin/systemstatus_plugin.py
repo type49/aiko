@@ -27,7 +27,6 @@ class SystemStatusCommand(AikoCommand):
 
         self.start_time = time.time()
 
-        logger.info("SystemStatusCommand: Инициализирован.")
 
     def get_report(self, ctx):
         process = psutil.Process()

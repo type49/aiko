@@ -27,7 +27,7 @@ class AikoCore:
         self.threads = {}
         self.restart_counters = {}
 
-        logger.info("Core: Инициализация...")
+        logger.info("Ядро: Инициализация...")
 
         # --- Подсистемы ---
         self.audio = AudioHandler(
@@ -47,7 +47,7 @@ class AikoCore:
         self.router = CommandRouter(nlu, intent_map, fallbacks)
         self.scheduler = TaskScheduler(self.ctx)
 
-        logger.info("Core: Готово.")
+        logger.info("Ядро: Инициализация завершена.")
 
     # =========================
     # Lifecycle
@@ -95,14 +95,14 @@ class AikoCore:
                     continue
 
         except KeyboardInterrupt:
-            logger.warning("Core: Остановка по Ctrl+C")
+            logger.warning("Ядро: Остановка по Ctrl+C")
         except Exception:
-            logger.critical("Core: Фатальный сбой", exc_info=True)
+            logger.critical("Ядро: Фатальный сбой", exc_info=True)
         finally:
             self.shutdown()
 
     def shutdown(self):
-        logger.info("Core: Shutdown...")
+        logger.info("Ядро: Shutdown...")
 
         self.stop_event.set()
 
@@ -111,10 +111,10 @@ class AikoCore:
 
         for name, t in self.threads.items():
             if t.is_alive():
-                logger.debug(f"Core: Ожидание {name}")
+                logger.debug(f"Ядро: Ожидание {name}")
                 t.join(timeout=2)
 
-        logger.info("Core: Остановлен корректно.")
+        logger.info("Ядро: Остановлен корректно.")
 
     # =========================
     # Threads & Health
@@ -129,7 +129,7 @@ class AikoCore:
         )
         t.start()
         self.threads[name] = t
-        logger.debug(f"Core: Поток {name} запущен")
+        logger.debug(f"Ядро: Поток {name} запущен")
 
     def _monitor_health(self):
         for name, t in list(self.threads.items()):
@@ -197,7 +197,7 @@ class AikoCore:
         if name_triggered:
             self.set_state("active")
             if not clean_text.strip():
-                logger.info("Core: Получена пустая активация (имя без команды). Ожидаю ввод...")
+                logger.info("Ядро: Получена пустая активация (имя без команды). Ожидаю ввод...")
                 self.activation.refresh_activation()
                 return
 
