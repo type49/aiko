@@ -62,7 +62,7 @@ class AikoContext:
     def set_ui_status(self, new_status: str, source: str = "unknown"):
         """
         Централизованная установка UI статуса.
-        Автоматически оповещает все зарегистрированные UI элементы.
+        БЕЗОПАСНО: Автоматически оповещает все UI элементы через Qt сигналы.
 
         Args:
             new_status: Один из: "init", "idle", "active", "blocked", "mute"
@@ -81,12 +81,17 @@ class AikoContext:
         self.ui_status_value = new_status
         logger.info(f"CTX: UI статус изменен: {old_status} → {new_status} [{source}]")
 
-        # Оповещаем все UI элементы
-        for callback in self._ui_status_callbacks:
-            try:
-                callback(new_status)
-            except Exception as e:
-                logger.error(f"CTX: Ошибка в UI status callback: {e}")
+        # КРИТИЧНО: Используем сигналы вместо прямых вызовов
+        if self.signals:
+            # Отправляем через Qt сигнал (безопасно из любого потока)
+            self.signals.ui_status_changed.emit(new_status)
+        else:
+            # Fallback для прямых вызовов (только если сигналы не инициализированы)
+            for callback in self._ui_status_callbacks:
+                try:
+                    callback(new_status)
+                except Exception as e:
+                    logger.error(f"CTX: Ошибка в UI status callback: {e}")
 
         return True
 
@@ -100,11 +105,17 @@ class AikoContext:
 
     def _notify_state_change(self, state_name: str, new_value: bool):
         """Оповещает все зарегистрированные коллбеки об изменении состояния"""
-        for callback in self._state_change_callbacks:
-            try:
-                callback(state_name, new_value)
-            except Exception as e:
-                logger.error(f"CTX: Ошибка в callback: {e}")
+        # КРИТИЧНО: Используем Qt сигналы для безопасного межпоточного вызова
+        if self.signals:
+            # Отправляем через сигнал (безопасно из любого потока)
+            self.signals.state_changed.emit(state_name, new_value)
+        else:
+            # Fallback для прямого вызова (только если в том же потоке)
+            for callback in self._state_change_callbacks:
+                try:
+                    callback(state_name, new_value)
+                except Exception as e:
+                    logger.error(f"CTX: Ошибка в callback: {e}")
 
     def get_microphone_should_listen(self):
         """

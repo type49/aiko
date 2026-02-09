@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Slot
 from utils.logger import logger
 
 
@@ -22,11 +22,12 @@ class AikoTray(QSystemTrayIcon):
         # Показываем трей ТОЛЬКО ПОСЛЕ установки иконки и подключения сигнала
         self.show()
 
-        print(f"Tray shown: {self.isVisible()}")
-        print(f"Icon is null: {self.icon().isNull()}")
-
         # Подписываемся на обновления UI статуса через ctx ПОСЛЕ show()
-        self.app.ctx.register_ui_status_callback(self.update_icon)
+        if self.app.ctx.signals:
+            self.app.ctx.signals.ui_status_changed.connect(self.update_icon)
+            logger.info("Tray: Подключен к ui_status_changed сигналу")
+        else:
+            logger.warning("Tray: Сигналы не инициализированы!")
 
         logger.info("Tray: Инициализирован.")
 
@@ -91,10 +92,11 @@ class AikoTray(QSystemTrayIcon):
 
         self.setContextMenu(menu)
 
+    @Slot(str)
     def update_icon(self, status: str):
         """
         Обновляет иконку трея в зависимости от статуса.
-        Вызывается автоматически через callback system из ctx.
+        БЕЗОПАСНО: Вызывается через Qt сигнал из любого потока!
         """
         if self.current_status == status:
             return

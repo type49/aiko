@@ -4,7 +4,8 @@ import ctypes
 from PySide6.QtWidgets import QApplication, QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout
 from PySide6.QtCore import Qt, QTimer, QDateTime, QRectF, QPoint, QPropertyAnimation, QEasingCurve, Property
 from PySide6.QtGui import QPainter, QColor, QPixmap, QPainterPath, QTransform
-
+from PySide6.QtCore import Qt, QTimer, QDateTime, QRectF, QPoint, QPropertyAnimation, QEasingCurve, Property, Slot
+from utils.logger import logger
 from utils.audio_player import audio_manager
 
 try:
@@ -705,16 +706,18 @@ class AikoWindow(QWidget):
         self.ctx = ctx
         self.core = core
 
-        # Регистрируем коллбек для получения уведомлений об изменении состояния
-        self.ctx.register_state_callback(self._on_state_changed)
+        # КРИТИЧНО: Подключаемся к Qt сигналу вместо прямого callback
+        if self.ctx.signals:
+            self.ctx.signals.state_changed.connect(self._on_state_changed)
 
         # Сразу синхронизируем состояние кнопок с реальным состоянием системы
         self._sync_button_states()
 
+    @Slot(str, bool)
     def _on_state_changed(self, state_name: str, new_value: bool):
         """
         Коллбек, вызываемый при изменении состояния в ctx.
-        Обновляет иконки кнопок при изменении состояния из любого источника.
+        БЕЗОПАСНО: Вызывается через Qt сигнал из любого потока!
         """
         if state_name == "microphone":
             self.mic_enabled = new_value
@@ -739,32 +742,48 @@ class AikoWindow(QWidget):
                 self.square_button_5.update()
 
     def _sync_button_states(self):
-        """Синхронизирует иконки кнопок с реальным состоянием из ctx"""
+        """Синхронизирует иконки кнопок с РЕАЛЬНЫМ состоянием из ctx и аудио-потока"""
         if not self.ctx or not self.core:
             return
 
-        # Синхронизация микрофона из ctx
-        self.mic_enabled = self.ctx.microphone_enabled
-        icon_name = "square2.png" if self.mic_enabled else "square2off.png"
+        # КРИТИЧНО: Синхронизируем с РЕАЛЬНЫМ состоянием аудио-потока
+        try:
+            real_stream_state = self.core.audio.get_stream_state()
+        except Exception as e:
+            logger.error(f"Window: Не удалось получить состояние потока: {e}")
+            real_stream_state = False
+
+        # Если состояния расходятся - синхронизируем
+        if self.ctx.microphone_enabled != real_stream_state:
+            logger.warning(
+                f"Window: Обнаружено расхождение состояний! "
+                f"ctx={self.ctx.microphone_enabled}, stream={real_stream_state}. "
+                f"Синхронизация с реальным состоянием потока."
+            )
+            self.ctx.microphone_enabled = real_stream_state
+
+        # Обновляем UI по реальному состоянию
+        self.mic_enabled = real_stream_state
+        icon_name = "square2.png" if real_stream_state else "square2off.png"
         icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons", icon_name)
-        self.square_button_2.icon_pixmap = QPixmap(icon_path) if os.path.exists(icon_path) else None
-        self.square_button_2.update()
+
+        if hasattr(self, 'square_button_2'):
+            self.square_button_2.icon_pixmap = QPixmap(icon_path) if os.path.exists(icon_path) else None
+            self.square_button_2.update()
 
         # Синхронизация режима концентрации из ctx
         self.focus_enabled = self.ctx.focus_mode_active
 
-        # ИСПРАВЛЕНО: правильная логика выбора иконки
         if self.focus_enabled:
-            # Режим ВКЛЮЧЕН
             icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5off.png")
             if not os.path.exists(icon_path):
                 icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5.png")
         else:
-            # Режим ВЫКЛЮЧЕН
             icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5.png")
 
-        self.square_button_5.icon_pixmap = QPixmap(icon_path) if os.path.exists(icon_path) else None
-        self.square_button_5.update()
+        if hasattr(self, 'square_button_5'):
+            self.square_button_5.icon_pixmap = QPixmap(icon_path) if os.path.exists(icon_path) else None
+            self.square_button_5.update()
 
     def _get_focus_plugin(self):
         """Находит плагин FocusManager"""

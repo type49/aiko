@@ -60,6 +60,14 @@ class AudioHandler:
             # Передаем статус дальше (например, для отрисовки иконки в GUI)
             self.on_status_change(new_state, msg)
 
+    def get_stream_state(self):
+        """
+        Безопасное получение реального состояния потока.
+        Используется для синхронизации UI.
+        """
+        with self._stream_lock:
+            return self._stream_active
+
     def stop_stream(self):
         """
         Физически останавливает аудиопоток, освобождая микрофон.
@@ -86,54 +94,61 @@ class AudioHandler:
         """
         Физически запускает аудиопоток, захватывая микрофон.
         Вызывается при включении микрофона через GUI или команду.
+
+        ВАЖНО: Метод использует минимальную блокировку для избежания deadlock
+        при вызове из GUI потока.
         """
-        with self._stream_lock:
-            if self._stream_active:
-                logger.debug("Audio: Поток уже активен")
-                return True
+        # Быстрая проверка без блокировки
+        if self._stream_active:
+            logger.debug("Audio: Поток уже активен")
+            return True
 
-            try:
-                # Валидация устройства
-                devices = sd.query_devices()
-                if self.device_id >= len(devices):
-                    raise IndexError(f"Устройство #{self.device_id} отсутствует.")
+        try:
+            # Валидация устройства
+            devices = sd.query_devices()
+            if self.device_id >= len(devices):
+                raise IndexError(f"Устройство #{self.device_id} отсутствует.")
 
-                dev_info = devices[self.device_id]
-                logger.debug(f"Audio: Открытие потока для '{dev_info['name']}'")
+            dev_info = devices[self.device_id]
+            logger.debug(f"Audio: Открытие потока для '{dev_info['name']}'")
 
-                # Очищаем очередь перед запуском
-                with self.audio_q.mutex:
-                    self.audio_q.queue.clear()
+            # Очищаем очередь перед запуском
+            with self.audio_q.mutex:
+                self.audio_q.queue.clear()
 
-                # Создаём поток
-                self._stream = sd.InputStream(
-                    samplerate=self.samplerate,
-                    device=self.device_id,
-                    channels=1,
-                    dtype='int16',
-                    callback=self._callback,
-                    blocksize=4000
-                )
+            # Создаём поток БЕЗ глобальной блокировки (sounddevice thread-safe)
+            new_stream = sd.InputStream(
+                samplerate=self.samplerate,
+                device=self.device_id,
+                channels=1,
+                dtype='int16',
+                callback=self._callback,
+                blocksize=4000
+            )
 
-                self._stream.start()
+            # Запускаем поток
+            new_stream.start()
+
+            # Атомарное обновление состояния с минимальной блокировкой
+            with self._stream_lock:
+                self._stream = new_stream
                 self._stream_active = True
                 self.last_audio_time = time.time()
 
-                # self._notify(True, "Микрофон захвачен")
-                logger.info("Audio: Поток запущен, микрофон захвачен")
-                return True
+            logger.info("Audio: Поток запущен, микрофон захвачен")
+            return True
 
-            except Exception as e:
-                error_msg = f"Не удалось захватить микрофон: {str(e)[:60]}"
-                self._notify(False, error_msg)
-                logger.error(f"Audio: Ошибка запуска потока: {e}")
+        except Exception as e:
+            error_msg = f"Не удалось захватить микрофон: {str(e)[:60]}"
+            self._notify(False, error_msg)
+            logger.error(f"Audio: Ошибка запуска потока: {e}")
 
-                # Уведомляем контекст что микрофон заблокирован
-                if ctx():
-                    ctx().set_microphone_state(False, source="audio_error")
-                    ctx().broadcast(error_msg, level="error", ui=True, tg=False)
+            # Уведомляем контекст что микрофон заблокирован
+            if ctx():
+                ctx().set_microphone_state(False, source="audio_error")
+                ctx().broadcast(error_msg, level="error", ui=True, tg=False)
 
-                return False
+            return False
 
     def listen(self, stop_event):
         """
