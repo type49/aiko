@@ -1,0 +1,45 @@
+/* Базовые стили - размеры будут установлены программно */
+
+QLabel#time_label {
+    color: white;
+    font-weight: bold;
+    background: transparent;
+}
+
+QLabel#date_label {
+    color: rgba(255, 255, 255, 180);
+    background: transparent;
+}
+
+QLabel#signal_title {
+    color: white;
+    background: transparent;
+}
+
+QLabel#signal_text {
+    color: rgba(255, 255, 255, 180);
+    background: transparent;
+}
+
+QPushButton {
+    background: white;
+    border: none;
+}
+
+QPushButton:hover {
+    background: rgba(255, 255, 255, 230);
+}
+
+QPushButton:pressed {
+    background: rgba(255, 255, 255, 200);
+}
+
+QPushButton#square_button {
+    background: white;
+    border: none;
+}
+
+QPushButton#circle_button {
+    background: white;
+    border: none;
+}

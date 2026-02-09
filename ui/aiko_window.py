@@ -544,21 +544,21 @@ class AikoWindow(QWidget):
         # --- БЛОК ТЕКСТОВ (вертикальный лэйаут) ---
         signal_layout = QVBoxLayout()
         signal_layout.setContentsMargins(0, 0, 0, 0)
-        signal_layout.setSpacing(0)
+        signal_layout.setSpacing(8)
 
         # Размеры шрифтов для текстов сигнала
         signal_title_font_size = int(18 * self.scale_factor)
-        signal_text_font_size = int(14 * self.scale_factor)
+        signal_text_font_size = int(15 * self.scale_factor)
 
         # Заголовок сигнала (когда ожидается следующий сигнал)
         self.signal_title = QLabel("Следующий сигнал через два часа три минуты", main_container)
         self.signal_title.setObjectName("signal_title")
-        self.signal_title.setStyleSheet(f"font-size: {signal_title_font_size}px; margin: 0; padding: 0;")
+        self.signal_title.setStyleSheet(f"font-size: {signal_title_font_size}px; margin: 0, 0, 0, 0 ; padding: 0, 0, 0, 0;")
 
         # Текст сигнала (описание сигнала)
         self.signal_text = QLabel("Текст сигнала", main_container)
         self.signal_text.setObjectName("signal_text")
-        self.signal_text.setStyleSheet(f"font-size: {signal_text_font_size}px; margin: 0; padding: 0;")
+        self.signal_text.setStyleSheet(f"font-size: {signal_text_font_size}px; margin: 0, 0, 0, 0; padding: 0;")
 
         # Добавляем метки в вертикальный лэйаут
         signal_layout.addWidget(self.signal_title, 0, Qt.AlignLeft | Qt.AlignBottom)
