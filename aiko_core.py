@@ -73,11 +73,12 @@ class AikoCore:
                 self.activation.handle_timeouts(self.set_state)
 
                 for cmd in self.ctx.commands:
-                    if hasattr(cmd, 'on_tick'):
+                    if getattr(cmd, 'is_active', False):
                         try:
                             cmd.on_tick(self.ctx)
                         except Exception as e:
                             logger.error(f"Core: Ошибка тика в {cmd.__class__.__name__}: {e}")
+                            cmd.is_active = False
 
                 try:
                     data = self.audio.audio_q.get(timeout=0.1)

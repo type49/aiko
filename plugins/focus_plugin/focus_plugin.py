@@ -130,15 +130,11 @@ class FocusManager(AikoCommand):
             logger.error(f"FocusManager Tick Error: {e}")
 
     def _punish(self, ctx, violator):
-        """Наказание: звук + виньетка + уведомление"""
         ctx.ui_output(f"⚠️ ВЕРНИСЬ К РАБОТЕ! Обнаружен: {violator}", "error")
         audio_manager.play.focus_punish()
-
-        # Показываем пульсирующую виньетку
         self._show_vignette_pulse()
 
     def _show_vignette_pulse(self):
-        """Показывает пульсирующую виньетку"""
         try:
             self.vignette_overlay.pulse(duration=0.3, intensity=0.7, count=3)
         except Exception as e:
