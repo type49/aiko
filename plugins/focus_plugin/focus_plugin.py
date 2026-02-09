@@ -7,6 +7,7 @@ from utils.matcher import CommandMatcher
 from utils.logger import logger
 from vignette_overlay import VignetteOverlay
 
+
 class FocusManager(AikoCommand):
     def __init__(self):
         super().__init__()
@@ -53,34 +54,49 @@ class FocusManager(AikoCommand):
 
         # 2. Команда ОСТАНОВКИ
         if score_stop > score_start and match_stop:
-            if not self.is_active:
+            if not ctx.focus_mode_active:
                 ctx.ui_output("Режим концентрации и так выключен.", "info")
                 return True
 
-            self.is_active = False
-            self._hide_vignette()
-            ctx.ui_output("Режим концентрации ВЫКЛЮЧЕН. Свобода.", "info")
-            logger.info(f"FocusManager: Деактивация через '{match_stop}' ({score_stop}%)")
+            # Выключаем через централизованное управление
+            if ctx.set_focus_mode(False, source="voice"):
+                self.is_active = False
+                self._hide_vignette()
+                ctx.ui_output("Режим концентрации ВЫКЛЮЧЕН. Свобода.", "info")
+                logger.info(f"FocusManager: Деактивация через '{match_stop}' ({score_stop}%)")
+
             return True
 
         # 3. Команда ЗАПУСКА
         if match_start:
-            if self.is_active:
+            if ctx.focus_mode_active:
                 logger.debug("FocusManager: Попытка повторного включения (уже активен).")
                 return True
 
-            self.is_active = True
-            ctx.ui_output("РЕЖИМ КОНЦЕНТРАЦИИ АКТИВИРОВАН. Я слежу.", "error")
-            audio_manager.play.alarm()
-            logger.info(f"FocusManager: Активация через '{match_start}' ({score_start}%)")
+            # Включаем через централизованное управление
+            if ctx.set_focus_mode(True, source="voice"):
+                self.is_active = True
+                ctx.ui_output("РЕЖИМ КОНЦЕНТРАЦИИ АКТИВИРОВАН. Я слежу.", "error")
+                audio_manager.play.alarm()
+                logger.info(f"FocusManager: Активация через '{match_start}' ({score_start}%)")
+
             return True
 
         return False
 
     def on_tick(self, ctx):
         """Проверка окон и процессов каждые N секунд"""
-        if not self.is_active:
+        # Проверяем состояние из ctx (синхронизировано с GUI)
+        if not ctx.focus_mode_active:
+            # Если режим выключен в ctx, синхронизируем локальное состояние
+            if self.is_active:
+                self.is_active = False
+                self._hide_vignette()
             return
+
+        # Синхронизируем локальное состояние с ctx
+        if not self.is_active and ctx.focus_mode_active:
+            self.is_active = True
 
         curr_t = time.time()
         if curr_t - self.last_check_time < self.check_interval:
@@ -127,3 +143,9 @@ class FocusManager(AikoCommand):
         except Exception as e:
             logger.error(f"Ошибка виньетки: {e}")
 
+    def _hide_vignette(self):
+        """Скрывает виньетку"""
+        try:
+            self.vignette_overlay.hide()
+        except Exception as e:
+            logger.error(f"Ошибка скрытия виньетки: {e}")

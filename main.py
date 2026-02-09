@@ -53,10 +53,12 @@ if __name__ == "__main__":
     ctx.ui_manager = notifications
     # Регистрируем контекст глобально
     set_global_context(ctx)
-
     core = AikoCore(ctx)
-    tg_service = AikoTelegramService(ctx, core)
 
+    # НОВОЕ: Сохраняем core в контексте для доступа из плагинов
+    ctx.core = core
+
+    tg_service = AikoTelegramService(ctx, core)
     aiko_gui = AikoApp(ctx, core)
 
 

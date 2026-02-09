@@ -78,8 +78,12 @@ class AikoCore:
                     # ----------------------------------
 
                 try:
-                    # Уменьшаем timeout, чтобы цикл крутился чаще и тики были точнее
                     data = self.audio.audio_q.get(timeout=0.1)
+
+                    # КРИТИЧЕСКОЕ: Пропускаем обработку если микрофон "выключен"
+                    if not self.ctx.get_microphone_should_listen():
+                        continue
+
                     phrase = self.stt.get_phrase(data)
 
                     if phrase:
@@ -87,6 +91,7 @@ class AikoCore:
 
                 except queue.Empty:
                     continue
+
 
         except KeyboardInterrupt:
             logger.warning("Core: Остановка по Ctrl+C")

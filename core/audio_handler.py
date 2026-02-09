@@ -2,6 +2,7 @@ import sounddevice as sd
 import queue
 import time
 from utils.logger import logger
+from core.global_context import ctx
 
 
 class AudioHandler:
@@ -84,6 +85,7 @@ class AudioHandler:
                         callback=self._callback,
                         blocksize=4000  # Снизил до 125мс для лучшей отзывчивости, можно 4000
                 ):
+                    ctx().broadcast(f"Микрофон готов", level="error", ui=True)
                     self._notify(True, "Микрофон готов")
                     self.error_count = 0
 
