@@ -143,9 +143,10 @@ class ToastItem(QWidget):
     """Визуальный компонент уведомления"""
 
     def __init__(self, text: str, msg_type: str, priority: Optional[str],
+                 play_sound: True,
                  config: ToastConfig, manager, lifetime: Optional[int] = None):
         super().__init__()
-
+        self.play_sound = play_sound
         self.text = text
         self.msg_type = msg_type
         self.priority = priority
@@ -279,7 +280,8 @@ class ToastItem(QWidget):
         try:
             # Используем проверку существования файла в самом аудио-менеджере,
             # но здесь просто глушим ошибку.
-            audio_manager.play.notify()
+            if self.play_sound:
+                audio_manager.play.notify()
         except Exception:
             # Печатаем в консоль напрямую.
             # НЕ ВЫЗЫВАЙ logger.error здесь, иначе снова пойдет рекурсия!
@@ -382,7 +384,7 @@ class ToastItem(QWidget):
 
 class PopupNotification(QObject):
     """Менеджер уведомлений"""
-    _request_toast = Signal(str, str, object, object)
+    _request_toast = Signal(str, str, bool, object, object)
     def __init__(self, config: Optional[ToastConfig] = None):
         super().__init__()
         self.config = config or ToastConfig()
@@ -399,34 +401,16 @@ class PopupNotification(QObject):
         """Установить обработчик для типа сообщений"""
         self._click_handlers[msg_type] = handler
 
-    def add_item(self, text: str, msg_type: str = "info",
+    def add_item(self, text: str, msg_type: str = "info", play_sound=True,
                  priority: Optional[str] = None,
                  lifetime: Optional[int] = None):
         """Показать уведомление"""
         # 1. Проверка фильтров
         if any(f(text) for f in self._filters):
             return
+        self._request_toast.emit(text, msg_type, priority, lifetime, play_sound)
 
-        # # 2. Создание тоста с пробросом lifetime
-        # toast = ToastItem(
-        #     text=text,
-        #     msg_type=msg_type,
-        #     priority=priority,
-        #     config=self.config,
-        #     manager=self,
-        #     lifetime=lifetime
-        # )
-        #
-        # # 3. Добавление в начало списка.
-        # # Новые уведомления будут иметь индекс 0 и рисоваться в самой нижней позиции.
-        # self.active_toasts.insert(0, toast)
-        #
-        # # 4. Сначала рассчитываем позиции для всех, потом показываем новый
-        # self._reposition_all(animated=True)
-        # toast.show_toast()
-        self._request_toast.emit(text, msg_type, priority, lifetime)
-
-    def _internal_create_toast(self, text, msg_type, priority, lifetime):
+    def _internal_create_toast(self, text, msg_type, priority, lifetime, play_sound):
         """
         ОПАСНЫЙ метод. Работает ТОЛЬКО в GUI-потоке.
         Сюда мы попадаем через сигнал.
@@ -438,7 +422,8 @@ class PopupNotification(QObject):
             priority=priority,
             config=self.config,
             manager=self,
-            lifetime=lifetime
+            lifetime=lifetime,
+            play_sound=play_sound
         )
 
         self.active_toasts.insert(0, toast)

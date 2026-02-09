@@ -63,6 +63,7 @@ class FocusManager(AikoCommand):
                 self.is_active = False
                 self._hide_vignette()
                 ctx.ui_output("Режим концентрации ВЫКЛЮЧЕН. Свобода.", "info")
+                audio_manager.play.complete()
                 logger.info(f"FocusManager: Деактивация через '{match_stop}' ({score_stop}%)")
 
             return True
@@ -76,8 +77,8 @@ class FocusManager(AikoCommand):
             # Включаем через централизованное управление
             if ctx.set_focus_mode(True, source="voice"):
                 self.is_active = True
-                ctx.ui_output("РЕЖИМ КОНЦЕНТРАЦИИ АКТИВИРОВАН. Я слежу.", "error")
-                audio_manager.play.alarm()
+                ctx.ui_output("Включен режим концентрации", "success")
+                audio_manager.play.focus_start()
                 logger.info(f"FocusManager: Активация через '{match_start}' ({score_start}%)")
 
             return True
@@ -131,7 +132,7 @@ class FocusManager(AikoCommand):
     def _punish(self, ctx, violator):
         """Наказание: звук + виньетка + уведомление"""
         ctx.ui_output(f"⚠️ ВЕРНИСЬ К РАБОТЕ! Обнаружен: {violator}", "error")
-        audio_manager.play.alarm()
+        audio_manager.play.focus_punish()
 
         # Показываем пульсирующую виньетку
         self._show_vignette_pulse()

@@ -5,6 +5,8 @@ from PySide6.QtWidgets import QApplication, QWidget, QLabel, QPushButton, QHBoxL
 from PySide6.QtCore import Qt, QTimer, QDateTime, QRectF, QPoint, QPropertyAnimation, QEasingCurve, Property
 from PySide6.QtGui import QPainter, QColor, QPixmap, QPainterPath, QTransform
 
+from utils.audio_player import audio_manager
+
 try:
     myappid = 'strategy.advisor.adaptive.v1'
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
@@ -823,12 +825,11 @@ class AikoWindow(QWidget):
         if new_state:
             # ВКЛЮЧАЕМ режим концентрации
             focus_plugin.is_active = True
-            self.ctx.ui_output("Режим концентрации ВКЛЮЧЕН", "error")
+            self.ctx.ui_output("Активирован режим концентрации", "success", play_sound=False)
 
             # Проигрываем звук
             try:
-                from utils.audio_player import audio_manager
-                audio_manager.play.alarm()
+                audio_manager.play.focus_start()
             except Exception as e:
                 print(f"Ошибка воспроизведения звука: {e}")
         else:
@@ -836,8 +837,8 @@ class AikoWindow(QWidget):
             focus_plugin.is_active = False
             if hasattr(focus_plugin, '_hide_vignette'):
                 focus_plugin._hide_vignette()
-
-            self.ctx.ui_output("Режим концентрации выключен", "info")
+            audio_manager.play.complete()
+            self.ctx.ui_output("Режим концентрации выключен", "success", play_sound=False)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

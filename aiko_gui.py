@@ -124,14 +124,14 @@ class AikoApp(QObject):
         logger.debug(f"GUI: Окно {name} зарегистрировано. Активных окон: {len(self._windows)}")
 
 
-    def _handle_ui_output(self, text, level="info", priority=None, message=False, duration=None):
+    def _handle_ui_output(self, text, level="info", play_sound=True, priority=None, message=False, duration=None):
 
         if message:
             # Центральное сообщение от ассистента
             self.assistant_msg.show_message(str(text), duration)
         else:
             # Обычное уведомление сбоку
-            self.signals.display_message.emit(str(text), level, priority)
+            self.signals.display_message.emit(str(text), level, priority, play_sound)
 
 
     def _handle_audio_status_change(self, is_ok, message):
