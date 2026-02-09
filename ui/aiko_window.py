@@ -711,8 +711,8 @@ class AikoWindow(QWidget):
 
     def _on_state_changed(self, state_name: str, new_value: bool):
         """
-        Коллбек, вызываемый при изменении состояния в ctx
-        Обновляет иконки кнопок при изменении состояния из любого источника
+        Коллбек, вызываемый при изменении состояния в ctx.
+        Обновляет иконки кнопок при изменении состояния из любого источника.
         """
         if state_name == "microphone":
             self.mic_enabled = new_value
@@ -725,15 +725,11 @@ class AikoWindow(QWidget):
         elif state_name == "focus_mode":
             self.focus_enabled = new_value
 
-            # ИСПРАВЛЕНО: правильная логика выбора иконки
             if new_value:
-                # Режим ВКЛЮЧЕН - пробуем загрузить square5on.png
                 icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5off.png")
                 if not os.path.exists(icon_path):
-                    # Если нет, используем обычную square5.png
                     icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5.png")
             else:
-                # Режим ВЫКЛЮЧЕН - используем square5.png
                 icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5.png")
 
             if hasattr(self, 'square_button_5'):
@@ -779,14 +775,21 @@ class AikoWindow(QWidget):
         return None
 
     def toggle_microphone(self):
-        """Переключает состояние микрофона через централизованное управление"""
+        """
+        Переключает состояние микрофона через централизованное управление.
+        Все обновления UI произойдут автоматически через callback систему.
+        """
         if not self.core or not self.ctx:
             print("Ошибка: контекст не установлен")
             return
 
         new_state = not self.ctx.microphone_enabled
 
-        # Обновляем состояние в ctx (это вызовет коллбек _on_state_changed)
+        # Обновляем состояние в ctx
+        # Это автоматически:
+        # 1. Обновит self.mic_enabled через _on_state_changed
+        # 2. Обновит иконку кнопки
+        # 3. Обновит UI статус (включая трей)
         if not self.ctx.set_microphone_state(new_state, source="gui"):
             return  # Состояние не изменилось
 
@@ -794,7 +797,7 @@ class AikoWindow(QWidget):
             self.ctx.ui_output("Микрофон включен", "success")
         else:
             self.ctx.ui_output("Микрофон выключен", "info")
-            # Очищаем очередь аудио, чтобы не обработать старые данные
+            # Очищаем очередь аудио
             with self.core.audio.audio_q.mutex:
                 self.core.audio.audio_q.queue.clear()
 

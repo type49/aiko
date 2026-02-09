@@ -32,7 +32,7 @@ class AikoCore:
         # --- Подсистемы ---
         self.audio = AudioHandler(
             device_id=self.ctx.device_id,
-            on_status_change=self.ctx.ui_audio_status
+            on_status_change=self._handle_audio_status_change
         )
 
         self.stt = STTService(self.ctx.model_path)
@@ -56,6 +56,9 @@ class AikoCore:
     def run(self):
         logger.info("Core: Запуск системы.")
 
+        # Устанавливаем начальный статус
+        self.ctx.set_ui_status("idle", source="core_startup")
+
         self._start_thread(
             name="AudioIn",
             target=self.audio.listen,
@@ -75,7 +78,6 @@ class AikoCore:
                             cmd.on_tick(self.ctx)
                         except Exception as e:
                             logger.error(f"Core: Ошибка тика в {cmd.__class__.__name__}: {e}")
-                    # ----------------------------------
 
                 try:
                     data = self.audio.audio_q.get(timeout=0.1)
@@ -91,7 +93,6 @@ class AikoCore:
 
                 except queue.Empty:
                     continue
-
 
         except KeyboardInterrupt:
             logger.warning("Core: Остановка по Ctrl+C")
@@ -160,6 +161,27 @@ class AikoCore:
             )
 
     # =========================
+    # Audio Status Handler
+    # =========================
+
+    def _handle_audio_status_change(self, is_ok: bool, message: str):
+        """
+        Обработчик изменения статуса аудио.
+        Автоматически обновляет UI статус.
+        """
+        if is_ok:
+            # Микрофон работает - переводим в idle (если не было других причин для blocked)
+            if self.ctx.ui_status_value == "blocked":
+                self.set_state("idle")
+        else:
+            # Микрофон отвалился - blocked
+            self.set_state("blocked")
+
+        # Показываем уведомление
+        level = "success" if is_ok else "error"
+        self.ctx.ui_output(message, level)
+
+    # =========================
     # Logic
     # =========================
 
@@ -174,13 +196,10 @@ class AikoCore:
 
         if name_triggered:
             self.set_state("active")
-            # --- НОВАЯ ПРОВЕРКА ---
             if not clean_text.strip():
                 logger.info("Core: Получена пустая активация (имя без команды). Ожидаю ввод...")
                 self.activation.refresh_activation()
-                # Здесь можно вызвать self.ctx.reply("Слушаю") или пискнуть
                 return
-                # ----------------------
 
         executed = self.router.route(clean_text, self.ctx)
 
@@ -194,8 +213,18 @@ class AikoCore:
     # =========================
 
     def set_state(self, new_state: str):
+        """
+        Устанавливает состояние системы и автоматически обновляет UI статус.
+
+        Маппинг состояний:
+        - init → init
+        - idle → idle
+        - active → active
+        - blocked → blocked
+        """
         if self.ctx.state != new_state:
             logger.debug(f"Core: state {self.ctx.state} → {new_state}")
             self.ctx.state = new_state
-            if self.ctx.ui_status:
-                self.ctx.ui_status(new_state)
+
+            # Обновляем UI статус (автоматически обновит трей и другие UI элементы)
+            self.ctx.set_ui_status(new_state, source="core_state_change")

@@ -21,6 +21,11 @@ class AikoContext:
         self.microphone_enabled = True  # Состояние микрофона
         self.focus_mode_active = False  # Состояние режима концентрации
 
+        # --- UI СТАТУС (для трея и других UI элементов) ---
+        # Возможные значения: "init", "idle", "active", "blocked", "mute"
+        self.ui_status_value = "init"
+        self._ui_status_callbacks = []  # Коллбеки для обновления UI (трей, окна и т.д.)
+
         # Коллбеки для оповещения GUI об изменениях состояния
         self._state_change_callbacks = []
 
@@ -33,11 +38,58 @@ class AikoContext:
         self.model_path = Path(aiko_cfg.get("stt-model.path", "models/base"))
         self.device_id = aiko_cfg.get("audio.device_id", 1)
 
-        # --- Коллбеки для GUI ---
+        # --- Коллбеки для GUI (DEPRECATED - используйте set_ui_status) ---
         self.ui_status = lambda status: None
         self.ui_audio_status = lambda is_ok, msg: None
 
-    # ========== НОВЫЕ МЕТОДЫ: Управление состоянием ==========
+    # ========== UI СТАТУС (ЦЕНТРАЛИЗОВАННЫЙ) ==========
+
+    def register_ui_status_callback(self, callback):
+        """
+        Регистрирует коллбек для получения обновлений UI статуса.
+        Используется треем, окнами и другими UI элементами.
+
+        Коллбек вызывается как: callback(status: str)
+        где status один из: "init", "idle", "active", "blocked", "mute"
+        """
+        if callback not in self._ui_status_callbacks:
+            self._ui_status_callbacks.append(callback)
+            logger.debug("CTX: Зарегистрирован UI status callback")
+            # Сразу отправляем текущий статус
+            callback(self.ui_status_value)
+
+    def set_ui_status(self, new_status: str, source: str = "unknown"):
+        """
+        Централизованная установка UI статуса.
+        Автоматически оповещает все зарегистрированные UI элементы.
+
+        Args:
+            new_status: Один из: "init", "idle", "active", "blocked", "mute"
+            source: Источник изменения (для логирования)
+        """
+        valid_statuses = ["init", "idle", "active", "blocked", "mute"]
+        if new_status not in valid_statuses:
+            logger.warning(f"CTX: Некорректный UI статус '{new_status}', игнорирую")
+            return False
+
+        if self.ui_status_value == new_status:
+            logger.debug(f"CTX: UI статус уже '{new_status}', пропуск")
+            return False
+
+        old_status = self.ui_status_value
+        self.ui_status_value = new_status
+        logger.info(f"CTX: UI статус изменен: {old_status} → {new_status} [{source}]")
+
+        # Оповещаем все UI элементы
+        for callback in self._ui_status_callbacks:
+            try:
+                callback(new_status)
+            except Exception as e:
+                logger.error(f"CTX: Ошибка в UI status callback: {e}")
+
+        return True
+
+    # ========== УПРАВЛЕНИЕ СОСТОЯНИЯМИ ==========
 
     def register_state_callback(self, callback):
         """Регистрирует коллбек для оповещения об изменении состояния"""
@@ -75,7 +127,15 @@ class AikoContext:
         self.microphone_enabled = enabled
         logger.info(f"CTX: Микрофон {'включен' if enabled else 'выключен'} [{source}]")
 
-        # Оповещаем GUI
+        # Обновляем UI статус
+        if not enabled:
+            self.set_ui_status("blocked", source=f"mic_disabled_{source}")
+        else:
+            # Возвращаемся в idle, если не было других причин для blocked
+            if self.ui_status_value == "blocked":
+                self.set_ui_status("idle", source=f"mic_enabled_{source}")
+
+        # Оповещаем GUI о изменении состояния микрофона
         self._notify_state_change("microphone", enabled)
 
         return True
