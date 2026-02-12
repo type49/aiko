@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import time
 import threading
 from pathlib import Path
 from typing import Optional

@@ -19,7 +19,7 @@ class DBManager:
     # ИСПРАВЛЕНИЕ: Константа для timeout
     DB_TIMEOUT = 10  # секунд
 
-    def __init__(self, db_path="aiko_data.db"):
+    def __init__(self, db_path="data/aiko_data.db"):
         self.db_path = db_path
         self.is_functional = False
         self.was_recovered = False

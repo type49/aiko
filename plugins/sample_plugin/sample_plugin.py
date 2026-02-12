@@ -17,10 +17,11 @@ class SamplePlugin(AikoCommand):
         """
         self.ctx = ctx
         self.ctx.register_ui_status_callback(self.on_status_change)
+        self.ctx.config.get()
 
         ctx.reply("Плагин запущен", level="success")
         ctx.broadcast("Привяу, телеграм, плагин запущен!", ui=False, tg=True)
-        logger.info("PomodoroPlugin: Сессия успешно инициализирована.")
+        logger.info("SamplePlugin: Плагин успешно инициализирован.")
         return True
 
     def on_tick(self, ctx):
