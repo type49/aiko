@@ -36,6 +36,8 @@ def is_already_running():
 if __name__ == "__main__":
     if is_already_running():
         sys.exit(0)
+    from utils.audio_player import audio_manager
+    startup_channel = audio_manager.play.first_startup(volume=1.0, ignore_master=True)
 
     # ИСПРАВЛЕНИЕ: Создаем QApplication в самом начале
     app = QApplication(sys.argv)
@@ -43,7 +45,6 @@ if __name__ == "__main__":
 
     # ИСПРАВЛЕНИЕ: Теперь безопасно импортировать модули с Qt зависимостями
     from ui.notifications import PopupNotification
-    from utils.audio_player import audio_manager
     from aiko_core import AikoCore
     from aiko_gui import AikoApp
     from core.context import AikoContext
@@ -52,7 +53,6 @@ if __name__ == "__main__":
     from ui.left_window import LiquidGlassWindow
 
     # ИСПРАВЛЕНИЕ: Запускаем стартовый звук после инициализации QApplication
-    startup_channel = audio_manager.play.first_startup(volume=1.0, ignore_master=True)
 
     # Инициализация контекста
     ctx = AikoContext()

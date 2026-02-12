@@ -39,7 +39,7 @@ class MicrophoneControl(AikoCommand):
 
             # Выключаем через централизованное управление
             if ctx.set_microphone_state(False, source="voice"):
-                ctx.ui_output("Микрофон выключен", "info")
+                # ctx.ui_output("Микрофон выключен", "info")
                 logger.info(f"MicControl: Выключение через '{match_off}' ({score_off}%)")
 
                 # Очищаем очередь аудио
@@ -59,7 +59,7 @@ class MicrophoneControl(AikoCommand):
 
             # Включаем через централизованное управление
             if ctx.set_microphone_state(True, source="voice"):
-                ctx.ui_output("Микрофон включен", "success")
+                # ctx.ui_output("Микрофон включен", "success")
                 logger.info(f"MicControl: Включение через '{match_on}' ({score_on}%)")
 
             return True

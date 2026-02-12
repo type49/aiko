@@ -99,7 +99,6 @@ class AudioHandler:
                     self._stream.close()
                     self._stream = None
                     self._stream_active = False
-                    self._notify(False, "Микрофон освобождён")
                     logger.info("Audio: Поток остановлен, микрофон освобождён")
 
                     # Очищаем очередь
@@ -158,7 +157,6 @@ class AudioHandler:
                 self.last_audio_time = time.time()
 
             logger.info("Audio: Поток запущен, микрофон захвачен")
-            self._notify(True, "Микрофон активен")
             return True
 
         except Exception as e:

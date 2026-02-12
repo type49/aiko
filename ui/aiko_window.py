@@ -27,8 +27,20 @@ class CharacterWidget(QWidget):
 
         # Загрузка изображения персонажа
         self.character_pixmap = None
+
+        # ДОБАВИТЬ:
+        self.default_pixmap = None
+        self.click_pixmap = None
+        self._default_path = character_path  # просто запомним
+
         if character_path and os.path.exists(character_path):
-            self.character_pixmap = QPixmap(character_path)
+            self.default_pixmap = QPixmap(character_path)
+            self.character_pixmap = self.default_pixmap
+
+            # ДОБАВИТЬ: пробуем загрузить ai2.png рядом
+            ai2_path = os.path.join(os.path.dirname(character_path), "ai2.png")
+            if os.path.exists(ai2_path):
+                self.click_pixmap = QPixmap(ai2_path)
 
         # --- АНИМАЦИЯ ДЛЯ ПЕРСОНАЖА ---
         # Масштаб персонажа (для эффекта hover)
@@ -43,9 +55,22 @@ class CharacterWidget(QWidget):
         self.character_rotation_animation = QPropertyAnimation(self, b"character_rotation")
         self.character_rotation_animation.setDuration(400)  # Увеличил длительность для плавности
         self.character_rotation_animation.setEasingCurve(QEasingCurve.InOutCubic)  # Плавная кривая вместо Elastic
+        self.character_rotation_animation.finished.connect(self._restore_default_pixmap)
 
         # Включаем отслеживание мыши
         self.setMouseTracking(True)
+
+    def _set_pixmap_safe(self, pixmap: QPixmap | None):
+        if pixmap is None or pixmap.isNull():
+            return
+        self.character_pixmap = pixmap
+        self.update()
+
+    def _restore_default_pixmap(self):
+        if self.default_pixmap is None or self.default_pixmap.isNull():
+            return
+        self.character_pixmap = self.default_pixmap
+        self.update()
 
     # --- PROPERTY ДЛЯ АНИМАЦИИ ПЕРСОНАЖА (МАСШТАБ) ---
     def get_character_scale(self):
@@ -121,7 +146,8 @@ class CharacterWidget(QWidget):
         if not self.hitTest(event.position().toPoint()):
             event.ignore()
             return
-
+        if self.click_pixmap and not self.click_pixmap.isNull():
+            self._set_pixmap_safe(self.click_pixmap)
         self.character_rotation_animation.stop()
         self.character_rotation_animation.setDuration(400)
         self.character_rotation_animation.setStartValue(0.0)

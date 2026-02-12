@@ -79,9 +79,10 @@ class LiquidGlassWindow(QWidget):
 
         self.setup_ui()
 
-        # Создаем кнопку-вкладку
         self.edge_button = EdgeButton(self)
         self.edge_button.hide()
+
+        self.start_hidden()
 
         # Таймер для обновления данных
         self.timer = QTimer()
@@ -95,6 +96,14 @@ class LiquidGlassWindow(QWidget):
 
         # Первое обновление данных
         self.update_data()
+
+    def start_hidden(self):
+        """Стартуем как будто панель уже свернули (без анимации)."""
+        current_y = self.pos().y()
+        self.move(self.hidden_x, current_y)
+        self.is_hidden = True
+        self.hide_button.setText("▸")  # как в свернутом режим
+        self.edge_button.show()
 
     def toggle_visibility(self):
         """Плавное скрытие/показ панели"""

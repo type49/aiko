@@ -16,7 +16,7 @@ from utils.audio_player import audio_manager
 
 # --- МЕНЕДЖЕР ИСТОРИИ ---
 class HistoryManager:
-    def __init__(self, history_file="../data/chat_history.json"):
+    def __init__(self, history_file="data/chat_history.json"):
         self.history_file = history_file
         self.system_prompt = {
             "role": "system",
