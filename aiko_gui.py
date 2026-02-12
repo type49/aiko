@@ -123,10 +123,16 @@ class AikoApp(QObject):
         window.show()
         logger.debug(f"GUI: Окно {name} зарегистрировано. Активных окон: {len(self._windows)}")
 
-
     def _handle_ui_output(self, text, level="info", play_sound=True, priority=None, message=False, duration=None):
-        self.signals.display_message.emit(str(text), level, priority, play_sound)
+        try:
+            text_str = str(text) if text is not None else ""
+            level_str = str(level) if level is not None else "info"
+            priority_str = str(priority) if priority is not None else ""  # ← ЭТО КРИТИЧНО!
+            play_sound_bool = bool(play_sound) if play_sound is not None else True
 
+            self.signals.display_message.emit(text_str, level_str, priority_str, play_sound_bool)
+        except Exception as e:
+            logger.error(f"GUI: Ошибка в _handle_ui_output: {e}")
 
     def _handle_audio_status_change(self, is_ok, message):
         self.core.set_state("idle" if is_ok else "blocked")

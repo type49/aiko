@@ -17,6 +17,8 @@ from aiko_gui import AikoApp
 from core.context import AikoContext
 from services.telegram.bot import AikoTelegramService
 from core.global_context import set_global_context
+from ui.left_window import LiquidGlassWindow
+
 
 LOCK_PATH = os.path.join(tempfile.gettempdir(), "aiko_assistant.lock")
 lock = FileLock(LOCK_PATH, timeout=0)
@@ -59,7 +61,8 @@ if __name__ == "__main__":
 
     tg_service = AikoTelegramService(ctx, core)
     aiko_gui = AikoApp(ctx, core)
-
+    left_widget = LiquidGlassWindow()
+    left_widget.showMinimized()
 
     threading.Thread(target=run_telegram, args=(tg_service,), daemon=True, name="TGThread").start()
 

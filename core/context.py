@@ -83,13 +83,22 @@ class AikoContext:
 
         # КРИТИЧНО: Используем сигналы вместо прямых вызовов
         if self.signals:
-            # Отправляем через Qt сигнал (безопасно из любого потока)
-            self.signals.ui_status_changed.emit(new_status)
+            try:
+                if new_status is not None and isinstance(new_status, str):
+                    self.signals.ui_status_changed.emit(new_status)
+                else:
+                    logger.error(f"CTX: Некорректный тип ui_status: {type(new_status)}")
+            except (RuntimeError, TypeError) as e:
+                logger.debug(f"CTX: UI receiver error: {e}")
         else:
-            # Fallback для прямых вызовов (только если сигналы не инициализированы)
-            for callback in self._ui_status_callbacks:
+            for callback in self._ui_status_callbacks[:]:
                 try:
                     callback(new_status)
+                except RuntimeError:
+                    try:
+                        self._ui_status_callbacks.remove(callback)
+                    except ValueError:
+                        pass
                 except Exception as e:
                     logger.error(f"CTX: Ошибка в UI status callback: {e}")
 
@@ -105,17 +114,30 @@ class AikoContext:
 
     def _notify_state_change(self, state_name: str, new_value: bool):
         """Оповещает все зарегистрированные коллбеки об изменении состояния"""
-        # КРИТИЧНО: Используем Qt сигналы для безопасного межпоточного вызова
         if self.signals:
-            # Отправляем через сигнал (безопасно из любого потока)
-            self.signals.state_changed.emit(state_name, new_value)
+            try:
+                # Валидация типов для Signal(str, bool)
+                if not isinstance(state_name, str) or state_name is None:
+                    logger.error(f"CTX: Некорректный state_name: {type(state_name)}")
+                    return
+                if not isinstance(new_value, bool) or new_value is None:
+                    logger.error(f"CTX: Некорректный new_value: {type(new_value)}")
+                    return
+
+                self.signals.state_changed.emit(state_name, new_value)
+            except (RuntimeError, TypeError) as e:
+                logger.debug(f"CTX: Receiver error для {state_name}: {e}")
         else:
-            # Fallback для прямого вызова (только если в том же потоке)
-            for callback in self._state_change_callbacks:
+            for callback in self._state_change_callbacks[:]:
                 try:
                     callback(state_name, new_value)
+                except RuntimeError:
+                    try:
+                        self._state_change_callbacks.remove(callback)
+                    except ValueError:
+                        pass
                 except Exception as e:
-                    logger.error(f"CTX: Ошибка в callback: {e}")
+                    logger.error(f"CTX: Ошибка в callback для {state_name}: {e}")
 
     def get_microphone_should_listen(self):
         """

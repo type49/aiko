@@ -3,7 +3,6 @@ import threading
 import time
 from pathlib import Path
 from utils.logger import logger
-from core.global_context import ctx
 
 
 class AudioNamespace:

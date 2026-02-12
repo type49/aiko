@@ -7,6 +7,7 @@ from PySide6.QtGui import QPainter, QColor, QPixmap, QPainterPath, QTransform
 from PySide6.QtCore import Qt, QTimer, QDateTime, QRectF, QPoint, QPropertyAnimation, QEasingCurve, Property, Slot
 from utils.logger import logger
 from utils.audio_player import audio_manager
+from core.global_context import ctx
 
 try:
     myappid = 'strategy.advisor.adaptive.v1'
@@ -304,7 +305,7 @@ class AikoWindow(QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(None)
 
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.mic_enabled = True  # Состояние микрофона
         self.focus_enabled = False  # Состояние режима концентрации
@@ -314,7 +315,7 @@ class AikoWindow(QWidget):
         # Расчет scale_factor относительно Full HD (1920)
         screen_geometry = QApplication.primaryScreen().geometry()
         self.scale_factor = screen_geometry.width() / 1920.0
-
+        self._signal_connected = False  # Флаг для отслеживания подключения сигнала
         # Размеры теперь умножаются на коэффициент
         self.content_width = int(1000 * self.scale_factor)
         self.content_height = int(600 * self.scale_factor)
@@ -508,6 +509,7 @@ class AikoWindow(QWidget):
         self.circle_button_7 = AnimatedButton(main_container, "circle7", circle_icon_size)
         self.circle_button_7.setObjectName("circle_button")
         self.circle_button_7.setFixedSize(circle_widget_size, circle_widget_size)
+        self.circle_button_7.clicked.connect(self.circle_button_7_click)
         circle_buttons_layout.addWidget(self.circle_button_7)
 
         # Добавляем растяжку снизу, чтобы кнопки были прижаты к верхнему краю
@@ -707,8 +709,20 @@ class AikoWindow(QWidget):
         self.core = core
 
         # КРИТИЧНО: Подключаемся к Qt сигналу вместо прямого callback
+        # Используем Qt.UniqueConnection чтобы избежать дублирования
         if self.ctx.signals:
-            self.ctx.signals.state_changed.connect(self._on_state_changed)
+            try:
+                # Сначала отписываемся (на случай повторного вызова)
+                self.ctx.signals.state_changed.disconnect(self._on_state_changed)
+            except (RuntimeError, TypeError):
+                # Ещё не были подписаны
+                pass
+
+            # Подписываемся с UniqueConnection
+            self.ctx.signals.state_changed.connect(
+                self._on_state_changed,
+                Qt.UniqueConnection
+            )
 
         # Сразу синхронизируем состояние кнопок с реальным состоянием системы
         self._sync_button_states()
@@ -719,13 +733,46 @@ class AikoWindow(QWidget):
         Коллбек, вызываемый при изменении состояния в ctx.
         БЕЗОПАСНО: Вызывается через Qt сигнал из любого потока!
         """
+        # КРИТИЧНО: Проверяем что окно не закрыто
+        try:
+            if not self.isVisible():
+                return
+        except RuntimeError:
+            # Окно уже удалено C++ движком
+            return
+
         if state_name == "microphone":
             self.mic_enabled = new_value
             icon_name = "square2.png" if new_value else "square2off.png"
             icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons", icon_name)
-            if hasattr(self, 'square_button_2'):
-                self.square_button_2.icon_pixmap = QPixmap(icon_path) if os.path.exists(icon_path) else None
-                self.square_button_2.update()
+
+            # КРИТИЧНО: Безопасная проверка существования виджета
+            try:
+                if hasattr(self, 'square_button_2') and self.square_button_2 is not None:
+                    self.square_button_2.icon_pixmap = QPixmap(icon_path) if os.path.exists(icon_path) else None
+                    self.square_button_2.update()
+            except RuntimeError:
+                # Кнопка уже удалена - это нормально
+                pass
+
+        elif state_name == "focus_mode":
+            self.focus_enabled = new_value
+
+            if new_value:
+                icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5off.png")
+                if not os.path.exists(icon_path):
+                    icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5.png")
+            else:
+                icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5.png")
+
+            # КРИТИЧНО: Безопасная проверка существования виджета
+            try:
+                if hasattr(self, 'square_button_5') and self.square_button_5 is not None:
+                    self.square_button_5.icon_pixmap = QPixmap(icon_path) if os.path.exists(icon_path) else None
+                    self.square_button_5.update()
+            except RuntimeError:
+                # Кнопка уже удалена - это нормально
+                pass
 
         elif state_name == "focus_mode":
             self.focus_enabled = new_value
@@ -858,6 +905,28 @@ class AikoWindow(QWidget):
                 focus_plugin._hide_vignette()
             audio_manager.play.complete()
             self.ctx.ui_output("Режим концентрации выключен", "success", play_sound=False)
+
+    def closeEvent(self, event):
+        """Безопасное закрытие окна с отпиской от всех сигналов"""
+        # Отписываемся от сигналов ПЕРЕД закрытием
+        if self.ctx and self.ctx.signals:
+            try:
+                self.ctx.signals.state_changed.disconnect(self._on_state_changed)
+            except (RuntimeError, TypeError):
+                # Уже отписаны или сигналы удалены
+                pass
+
+        # Помечаем окно как закрывающееся
+        self.setVisible(False)
+
+        # Вызываем родительский обработчик
+        super().closeEvent(event)
+
+    def circle_button_7_click(self):
+        from ui.chat_window import ChatWindow
+        context = ctx()
+        context.open_ui("chat_window")
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
