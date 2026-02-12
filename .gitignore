@@ -10,6 +10,7 @@ config.json
 aiko_data.db
 logs/
 
+chat_history.json
 .idea/
 .vscode/
 
