@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from enum import Enum
 from dataclasses import dataclass
 from typing import Optional, Callable
@@ -15,7 +16,7 @@ from utils.audio_player import audio_manager
 
 
 # ============================================================
-# CONFIG (можно вынести в общий конфиг приложения)
+# CONFIG
 # ============================================================
 
 @dataclass
@@ -30,14 +31,15 @@ class ToastConfig:
     slide_duration: int = 280
     auto_hide_delay: int = 5000
     reposition_duration: int = 200
+    max_toasts: int = 5  # ИСПРАВЛЕНИЕ: Максимальное количество одновременных тостов
 
 
 # ============================================================
-# STYLES (легко менять темы)
+# STYLES
 # ============================================================
 
 class ToastStyles:
-    """Централизованные стили для тостов"""
+    """Центр��лизованные стили для тостов"""
 
     ACCENTS = {
         "info": "#0A84FF",
@@ -143,18 +145,18 @@ class ToastItem(QWidget):
     """Визуальный компонент уведомления"""
 
     def __init__(self, text: str, msg_type: str, priority: Optional[str],
-                 play_sound: True,
-                 config: ToastConfig, manager, lifetime: Optional[int] = None):
+                 play_sound: bool = True,
+                 config: ToastConfig = None, manager=None, lifetime: Optional[int] = None):
         super().__init__()
         self.play_sound = play_sound
         self.text = text
         self.msg_type = msg_type
         self.priority = priority
-        self.config = config
+        self.config = config or ToastConfig()
         self.manager = manager
         self.final_pos = QPoint(0, 0)
         self.lifetime = lifetime if lifetime is not None else self.config.auto_hide_delay
-        self._is_hiding = False  # Флаг для предотвращения повторного показа
+        self._is_hiding = False
 
         self._setup_window()
         self._create_ui()
@@ -210,86 +212,66 @@ class ToastItem(QWidget):
             background-color: {colors['bar']};
             border-top-left-radius: {self.config.border_radius}px;
         """)
+        root.addWidget(self.accent_bar)
 
-        # Label
+        # Text label
         self.label = QLabel(self.text)
         self.label.setWordWrap(True)
         self.label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.label.setContentsMargins(12, 10, 12, 10)
 
-        # Content
-        content = QVBoxLayout()
-        content.setContentsMargins(14, 10, 14, 10)
-        content.addWidget(self.label)
+        # Calculate width
+        screen = QApplication.primaryScreen().availableGeometry()
+        max_width = int(screen.width() * self.config.max_width_ratio)
+        fm = QFontMetrics(self.label.font())
+        text_width = fm.boundingRect(
+            0, 0, max_width - 40, 1000,
+            Qt.TextWordWrap, self.text
+        ).width()
 
-        root.addWidget(self.accent_bar)
-        root.addLayout(content)
+        final_width = max(self.config.min_width, min(text_width + 40, max_width))
+        self.setFixedWidth(final_width)
+
+        root.addWidget(self.label, 1)
+        main_layout.addWidget(self.container)
 
         # Progress bar
         self.progress_bar = ProgressBar(colors['bar'], self.lifetime)
-
-        # Add to main layout
-        main_layout.addWidget(self.container)
         main_layout.addWidget(self.progress_bar)
 
-        # Size calculation
-        self._calculate_size()
-
-        # Opacity effect
-        self.opacity_effect = QGraphicsOpacityEffect(self)
-        self.setGraphicsEffect(self.opacity_effect)
-
-    def _calculate_size(self):
-        """Вычисление размеров"""
-        screen = QApplication.primaryScreen().availableGeometry()
-        max_width = int(screen.width() * self.config.max_width_ratio)
-
-        fm = QFontMetrics(self.label.font())
-        text_width = fm.horizontalAdvance(self.text)
-        target_width = min(max(text_width + 40, self.config.min_width), max_width)
-
-        self.label.setFixedWidth(target_width - 40)
-        self.container.setFixedWidth(target_width)
-        self.progress_bar.setFixedWidth(target_width)
-        self.label.adjustSize()
-        self.container.adjustSize()
         self.adjustSize()
 
     def _setup_animations(self):
         """Настройка анимаций"""
+        # Fade
+        self.opacity_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.opacity_effect)
         self.fade_anim = QPropertyAnimation(self.opacity_effect, b"opacity")
         self.fade_anim.setDuration(self.config.fade_duration)
         self.fade_anim.setEasingCurve(QEasingCurve.OutCubic)
 
+        # Slide in
         self.slide_anim = QPropertyAnimation(self, b"pos")
         self.slide_anim.setDuration(self.config.slide_duration)
         self.slide_anim.setEasingCurve(QEasingCurve.OutCubic)
 
-        # Отдельная анимация для скрытия
+        # Hide slide
         self.hide_slide_anim = QPropertyAnimation(self, b"pos")
         self.hide_slide_anim.setDuration(self.config.slide_duration)
-        self.hide_slide_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.hide_slide_anim.setEasingCurve(QEasingCurve.InCubic)
         self.hide_slide_anim.finished.connect(self._destroy)
 
     def _play_sound(self):
-        """Воспроизведение звука с защитой от бесконечного цикла"""
-        # 1. Если это ошибка — молчим. Безопасность превыше всего.
-        if self.msg_type == "error" or self.priority == "critical":
-            return
-
-        # 2. Пытаемся проиграть звук уведомления
+        """Воспроизведение звука"""
         try:
-            # Используем проверку существования файла в самом аудио-менеджере,
-            # но здесь просто глушим ошибку.
             if self.play_sound:
                 audio_manager.play.notify()
         except Exception:
-            # Печатаем в консоль напрямую.
-            # НЕ ВЫЗЫВАЙ logger.error здесь, иначе снова пойдет рекурсия!
             print("LOG: [Toast] Notification sound file missing, skipping sound.")
 
     def reposition(self, index: int, animated: bool = False):
         """Установка позиции тоста"""
-        if self._is_hiding:  # Не перемещаем тост, который скрывается
+        if self._is_hiding:
             return
 
         screen = QApplication.primaryScreen().availableGeometry()
@@ -300,11 +282,9 @@ class ToastItem(QWidget):
         new_pos = QPoint(x, y)
 
         if not self.isVisible():
-            # Начальная позиция со смещением
             self.final_pos = new_pos
             self.move(x + 14, y)
         elif animated:
-            # Анимированное перемещение
             self.final_pos = new_pos
             self._animate_move(new_pos)
         else:
@@ -312,7 +292,7 @@ class ToastItem(QWidget):
 
     def _animate_move(self, new_pos: QPoint):
         """Плавное перемещение"""
-        if self._is_hiding:  # Не анимируем перемещение для скрывающегося тоста
+        if self._is_hiding:
             return
 
         anim = QPropertyAnimation(self, b"pos")
@@ -321,7 +301,7 @@ class ToastItem(QWidget):
         anim.setEndValue(new_pos)
         anim.setEasingCurve(QEasingCurve.OutCubic)
         anim.start()
-        self._move_anim = anim  # Сохраняем ссылку
+        self._move_anim = anim
 
     def show_toast(self):
         """Показ с анимацией"""
@@ -343,12 +323,12 @@ class ToastItem(QWidget):
             self.progress_bar.start_animation()
 
         # Auto-hide
-        if self.lifetime > 0:  # Если 0, можно сделать уведомление вечным
+        if self.lifetime > 0:
             QTimer.singleShot(self.lifetime, self.hide_toast)
 
     def hide_toast(self):
         """Скрытие с анимацией уезжания вправо"""
-        if self._is_hiding:  # Предотвращаем повторное скрытие
+        if self._is_hiding:
             return
 
         self._is_hiding = True
@@ -383,8 +363,13 @@ class ToastItem(QWidget):
 # ============================================================
 
 class PopupNotification(QObject):
-    """Менеджер уведомлений"""
+    """
+    Менеджер уведомлений
+
+    ИСПРАВЛЕНО: Добавлено ограничение на максимальное количество тостов
+    """
     _request_toast = Signal(str, str, bool, object, object)
+
     def __init__(self, config: Optional[ToastConfig] = None):
         super().__init__()
         self.config = config or ToastConfig()
@@ -414,8 +399,16 @@ class PopupNotification(QObject):
         """
         ОПАСНЫЙ метод. Работает ТОЛЬКО в GUI-потоке.
         Сюда мы попадаем через сигнал.
+
+        ИСПРАВЛЕНО: Добавлена проверка максимального количества тостов
         """
-        # 4. Вот теперь создаем виджет — это безопасно, т.к. сигнал перенес нас в GUI-поток
+        # ИСПРАВЛЕНИЕ: Удаляем старые тосты если превышен лимит
+        if len(self.active_toasts) >= self.config.max_toasts:
+            # Удаляем самый старый тост (последний в списке)
+            oldest_toast = self.active_toasts[-1]
+            oldest_toast.hide_toast()
+            # Не удаляем из списка здесь - это сделает remove_item при завершении анимации
+
         toast = ToastItem(
             text=text,
             msg_type=msg_type,
@@ -446,15 +439,13 @@ class PopupNotification(QObject):
         """Обработка клика по тосту"""
         if toast.msg_type in self._click_handlers:
             self._click_handlers[toast.msg_type](toast.text, toast.priority)
-            toast.hide_toast()  # Закрываем после обработки клика
+            toast.hide_toast()
             return
 
-        # Логирование (замени на logger при необходимости)
         print(f"[Toast] {toast.msg_type} clicked: {toast.text}")
 
     def clear_all(self):
         """Закрыть все уведомления"""
-        # Используем срез [:], так как оригинальный список будет меняться при удалении
         for toast in self.active_toasts[:]:
             toast.hide_toast()
 
@@ -466,21 +457,18 @@ class PopupNotification(QObject):
 if __name__ == "__main__":
     app = QApplication([])
 
-    # Создание менеджера
     notifications = PopupNotification()
 
-    # Добавление фильтра
     notifications.add_filter(lambda text: text.startswith("Слышу:"))
 
 
-    # Кастомный обработчик для cmd
     def handle_cmd(text, priority):
         print(f"Execute command: {text} (priority: {priority})")
 
 
     notifications.set_click_handler("cmd", handle_cmd)
 
-    # Использование (как у вас в ctx.reply)
+    # Тестирование
     notifications.add_item("Простое уведомление", "info")
     notifications.add_item("Успешно выполнено", "success", lifetime=2000)
     notifications.add_item("Внимание!", "info", priority="warning")

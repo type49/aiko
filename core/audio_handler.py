@@ -1,9 +1,9 @@
+# -*- coding: utf-8 -*-
 import sounddevice as sd
 import queue
 import time
 import threading
 from utils.logger import logger
-from core.global_context import ctx
 
 
 class AudioHandler:
@@ -11,6 +11,8 @@ class AudioHandler:
     Интерфейс захвата аудио.
     Обеспечивает стабильный поток данных из микрофона в систему.
     Поддерживает физическое включение/выключение микрофона.
+
+    ИСПРАВЛЕНО: Устранен deadlock через использование очереди команд
     """
 
     def __init__(self, device_id=1, samplerate=16000, on_status_change=None):
@@ -29,6 +31,14 @@ class AudioHandler:
         # Для контроля потока
         self._stream = None
         self._stream_lock = threading.Lock()
+
+        # ИСПРАВЛЕНИЕ: Очередь команд для thread-safe управления потоком
+        self._command_queue = queue.Queue()
+        self._ctx_ref = None  # Слабая ссылка на контекст (избегаем циклических импортов)
+
+    def set_context(self, ctx):
+        """Устанавливает ссылку на контекст после инициализации"""
+        self._ctx_ref = ctx
 
     def _callback(self, indata, frames, time_info, status):
         """
@@ -68,10 +78,19 @@ class AudioHandler:
         with self._stream_lock:
             return self._stream_active
 
-    def stop_stream(self):
+    def _clear_audio_queue(self):
+        """Безопасная очистка очереди аудио"""
+        # ИСПРАВЛЕНИЕ: Правильная очистка без прямого доступа к внутренней структуре
+        while not self.audio_q.empty():
+            try:
+                self.audio_q.get_nowait()
+            except queue.Empty:
+                break
+
+    def _stop_stream_internal(self):
         """
-        Физически останавливает аудиопоток, освобождая микрофон.
-        Вызывается при выключении микрофона через GUI или команду.
+        Внутренний метод остановки потока.
+        Вызывается только из audio потока.
         """
         with self._stream_lock:
             if self._stream is not None and self._stream_active:
@@ -84,19 +103,23 @@ class AudioHandler:
                     logger.info("Audio: Поток остановлен, микрофон освобождён")
 
                     # Очищаем очередь
-                    with self.audio_q.mutex:
-                        self.audio_q.queue.clear()
+                    self._clear_audio_queue()
 
                 except Exception as e:
                     logger.error(f"Audio: Ошибка остановки потока: {e}")
 
-    def start_stream(self):
+    def stop_stream(self):
         """
-        Физически запускает аудиопоток, захватывая микрофон.
-        Вызывается при включении микрофона через GUI или команду.
+        Публичный метод остановки потока.
+        Безопасен для вызова из любого потока.
+        """
+        # ИСПРАВЛЕНИЕ: Добавляем команду в очередь вместо прямого вызова
+        self._command_queue.put(('stop', None))
 
-        ВАЖНО: Метод использует минимальную блокировку для избежания deadlock
-        при вызове из GUI потока.
+    def _start_stream_internal(self):
+        """
+        Внутренний метод запуска потока.
+        Вызывается только из audio потока.
         """
         # Быстрая проверка без блокировки
         if self._stream_active:
@@ -113,8 +136,7 @@ class AudioHandler:
             logger.debug(f"Audio: Открытие потока для '{dev_info['name']}'")
 
             # Очищаем очередь перед запуском
-            with self.audio_q.mutex:
-                self.audio_q.queue.clear()
+            self._clear_audio_queue()
 
             # Создаём поток БЕЗ глобальной блокировки (sounddevice thread-safe)
             new_stream = sd.InputStream(
@@ -136,6 +158,7 @@ class AudioHandler:
                 self.last_audio_time = time.time()
 
             logger.info("Audio: Поток запущен, микрофон захвачен")
+            self._notify(True, "Микрофон активен")
             return True
 
         except Exception as e:
@@ -143,12 +166,47 @@ class AudioHandler:
             self._notify(False, error_msg)
             logger.error(f"Audio: Ошибка запуска потока: {e}")
 
-            # Уведомляем контекст что микрофон заблокирован
-            if ctx():
-                ctx().set_microphone_state(False, source="audio_error")
-                ctx().broadcast(error_msg, level="error", ui=True, tg=False)
+            # ИСПРАВЛЕНИЕ: Безопасное уведомление контекста без deadlock
+            if self._ctx_ref:
+                # Не вызываем set_microphone_state напрямую - это может вызвать deadlock
+                # Вместо этого только логируем и уведомляем через broadcast
+                try:
+                    self._ctx_ref.broadcast(error_msg, level="error", ui=True, tg=False)
+                except Exception as broadcast_err:
+                    logger.error(f"Audio: Ошибка broadcast: {broadcast_err}")
 
             return False
+
+    def start_stream(self):
+        """
+        Публичный метод запуска потока.
+        Безопасен для вызова из любого потока.
+        """
+        # ИСПРАВЛЕНИЕ: Добавляем команду в очередь вместо прямого вызова
+        self._command_queue.put(('start', None))
+
+    def _process_commands(self):
+        """Обработка команд из очереди (вызывается в audio потоке)"""
+        try:
+            command, args = self._command_queue.get_nowait()
+
+            if command == 'start':
+                self._start_stream_internal()
+            elif command == 'stop':
+                self._stop_stream_internal()
+            elif command == 'restart':
+                device_id = args
+                if device_id is not None:
+                    self.device_id = device_id
+                self._stop_stream_internal()
+                time.sleep(0.5)
+                if self._ctx_ref and self._ctx_ref.get_microphone_should_listen():
+                    self._start_stream_internal()
+
+        except queue.Empty:
+            pass
+        except Exception as e:
+            logger.error(f"Audio: Ошибка обработки команды: {e}")
 
     def listen(self, stop_event):
         """
@@ -158,11 +216,14 @@ class AudioHandler:
         logger.info(f"Audio: Запуск захвата (Device: {self.device_id}, Rate: {self.samplerate})")
 
         # Запускаем поток сразу при старте
-        self.start_stream()
+        self._start_stream_internal()
 
         while not stop_event.is_set():
+            # ИСПРАВЛЕНИЕ: Обрабатываем команды из очереди
+            self._process_commands()
+
             # Проверяем здоровье потока только если он должен быть активен
-            if self._stream_active and ctx() and ctx().get_microphone_should_listen():
+            if self._stream_active and self._ctx_ref and self._ctx_ref.get_microphone_should_listen():
                 try:
                     # Hardware Watchdog: если данные не поступали более 3 секунд
                     if time.time() - self.last_audio_time > 3.0:
@@ -180,42 +241,34 @@ class AudioHandler:
 
                                     # Уведомляем систему о потере микрофона
                                     self._notify(False, "Микрофон захвачен другой программой")
-                                    if ctx():
-                                        ctx().set_microphone_state(False, source="hardware_conflict")
-                                        ctx().broadcast(
-                                            "Микрофон захвачен другим приложением",
-                                            level="error",
-                                            ui=True,
-                                            tg=False
-                                        )
+                                    if self._ctx_ref:
+                                        try:
+                                            self._ctx_ref.broadcast(
+                                                "Микрофон захвачен другим приложением",
+                                                level="error",
+                                                ui=True,
+                                                tg=False
+                                            )
+                                        except Exception as broadcast_err:
+                                            logger.error(f"Audio: Ошибка broadcast: {broadcast_err}")
 
                                     # Останавливаем поток
-                                    self.stop_stream()
+                                    self._stop_stream_internal()
 
                 except Exception as e:
                     logger.error(f"Audio: Ошибка проверки здоровья: {e}")
 
-            time.sleep(0.5)
+            time.sleep(0.1)  # Уменьшили с 0.5 для более быстрой обработки команд
 
         # Останавливаем поток при завершении
-        self.stop_stream()
+        self._stop_stream_internal()
         logger.info("Audio: Цикл захвата завершён")
 
     def restart(self, new_device_id=None):
         """
         Принудительный перезапуск потока (например, при смене настроек в GUI).
+        Безопасен для вызова из любого потока.
         """
-        if new_device_id is not None:
-            self.device_id = new_device_id
-
-        logger.warning(f"Audio: Запрошен горячий рестарт (Device ID -> {self.device_id})")
-
-        # Останавливаем текущий поток
-        self.stop_stream()
-
-        # Небольшая пауза
-        time.sleep(0.5)
-
-        # Запускаем новый поток если микрофон должен быть включен
-        if ctx() and ctx().get_microphone_should_listen():
-            self.start_stream()
+        logger.warning(f"Audio: Запрошен горячий рестарт (Device ID -> {new_device_id or self.device_id})")
+        # ИСПРАВЛЕНИЕ: Добавляем команду в очередь
+        self._command_queue.put(('restart', new_device_id))

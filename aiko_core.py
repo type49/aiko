@@ -1,8 +1,8 @@
+# -*- coding: utf-8 -*-
 import time
 import threading
 import queue
 from utils.logger import logger
-from core.audio_handler import AudioHandler
 from core.plugin_loader import PluginLoader
 from utils.Intent_сlassifier import IntentClassifier
 from core.activation_service import ActivationService
@@ -15,6 +15,10 @@ class AikoCore:
     """
     Финальная версия Core.
     Один класс. Управляемый lifecycle. Без архитектурного долга.
+
+    ИСПРАВЛЕНО:
+    - Устранена циклическая зависимость через dependency injection
+    - Исправлена логика восстановления UI статуса
     """
 
     MAX_RESTARTS = 3
@@ -30,10 +34,16 @@ class AikoCore:
         logger.info("Ядро: Инициализация...")
 
         # --- Подсистемы ---
+        # ИСПРАВЛЕНИЕ: Импорт AudioHandler локально для избежания циклических зависимостей
+        from core.audio_handler import AudioHandler
+
         self.audio = AudioHandler(
             device_id=self.ctx.device_id,
             on_status_change=self._handle_audio_status_change
         )
+
+        # ИСПРАВЛЕНИЕ: Устанавливаем ссылку на контекст в audio_handler
+        self.audio.set_context(self.ctx)
 
         self.stt = STTService(self.ctx.model_path)
         self.activation = ActivationService(self.ctx)
@@ -169,11 +179,19 @@ class AikoCore:
         """
         Обработчик изменения статуса аудио.
         Автоматически обновляет UI статус.
+
+        ИСПРАВЛЕНО: Корректное восстановление предыдущего состояния
         """
         if is_ok:
-            # Микрофон работает - переводим в idle (если не было других причин для blocked)
+            # Микрофон работает
+            # Восстанавливаем UI статус через контекст (он сам решит какой статус установить)
+            # Не меняем статус здесь напрямую, т.к. контекст теперь умнее
+            logger.debug(f"Audio: Микрофон восстановлен, текущий UI статус: {self.ctx.ui_status_value}")
+
+            # Если были в blocked из-за проблем с микрофоном, восстанавливаем
             if self.ctx.ui_status_value == "blocked":
-                self.set_state("idle")
+                # Контекст сам восстановит сохраненный статус
+                self.ctx.set_microphone_state(True, source="audio_restored")
         else:
             # Микрофон отвалился - blocked
             self.set_state("blocked")

@@ -711,14 +711,8 @@ class AikoWindow(QWidget):
         # КРИТИЧНО: Подключаемся к Qt сигналу вместо прямого callback
         # Используем Qt.UniqueConnection чтобы избежать дублирования
         if self.ctx.signals:
-            try:
-                # Сначала отписываемся (на случай повторного вызова)
-                self.ctx.signals.state_changed.disconnect(self._on_state_changed)
-            except (RuntimeError, TypeError):
-                # Ещё не были подписаны
-                pass
-
-            # Подписываемся с UniqueConnection
+            # ИСПРАВЛЕНИЕ: Используем только UniqueConnection без disconnect
+            # Qt.UniqueConnection автоматически предотвратит дублирование
             self.ctx.signals.state_changed.connect(
                 self._on_state_changed,
                 Qt.UniqueConnection
