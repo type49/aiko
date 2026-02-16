@@ -9,7 +9,7 @@ class ConfigManager:
     Поддерживает вложенные ключи через точку (напр. 'audio.master_volume').
     """
 
-    def __init__(self, path="config.json"):
+    def __init__(self, path="data/config.json"):
         self.path = path
         self.config = self._load()
 
@@ -53,11 +53,12 @@ class ConfigManager:
             "audio": {
                 "device_id": 1,
                 "samplerate": 16000,
-                "master_volume": 0.7,
-                "match_threshold": 80
+                "match_threshold": 80,
+                "device_index": 0,
+                "master_volume": 1.0
             },
             "stt-model": {
-                "path": "model"
+                "path": "models/small/vosk-model-small-ru-0.22"
             },
             "trigger": {
                 "active_window": 5.0,
@@ -117,5 +118,4 @@ class ConfigManager:
                 self.save()
 
 
-# Глобальный экземпляр
 aiko_cfg = ConfigManager()

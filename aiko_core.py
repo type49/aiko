@@ -1,8 +1,8 @@
+# -*- coding: utf-8 -*-
 import time
 import threading
 import queue
 from utils.logger import logger
-from core.audio_handler import AudioHandler
 from core.plugin_loader import PluginLoader
 from utils.Intent_сlassifier import IntentClassifier
 from core.activation_service import ActivationService
@@ -15,6 +15,10 @@ class AikoCore:
     """
     Финальная версия Core.
     Один класс. Управляемый lifecycle. Без архитектурного долга.
+
+    ИСПРАВЛЕНО:
+    - Устранена циклическая зависимость через dependency injection
+    - Исправлена логика восстановления UI статуса
     """
 
     MAX_RESTARTS = 3
@@ -27,13 +31,19 @@ class AikoCore:
         self.threads = {}
         self.restart_counters = {}
 
-        logger.info("Core: Инициализация...")
+        logger.info("Ядро: Инициализация...")
 
         # --- Подсистемы ---
+        # ИСПРАВЛЕНИЕ: Импорт AudioHandler локально для избежания циклических зависимостей
+        from core.audio_handler import AudioHandler
+
         self.audio = AudioHandler(
             device_id=self.ctx.device_id,
-            on_status_change=self.ctx.ui_audio_status
+            on_status_change=self._handle_audio_status_change
         )
+
+        # ИСПРАВЛЕНИЕ: Устанавливаем ссылку на контекст в audio_handler
+        self.audio.set_context(self.ctx)
 
         self.stt = STTService(self.ctx.model_path)
         self.activation = ActivationService(self.ctx)
@@ -47,7 +57,7 @@ class AikoCore:
         self.router = CommandRouter(nlu, intent_map, fallbacks)
         self.scheduler = TaskScheduler(self.ctx)
 
-        logger.info("Core: Готово.")
+        logger.info("Ядро: Инициализация завершена.")
 
     # =========================
     # Lifecycle
@@ -55,6 +65,9 @@ class AikoCore:
 
     def run(self):
         logger.info("Core: Запуск системы.")
+
+        # Устанавливаем начальный статус
+        self.ctx.set_ui_status("idle", source="core_startup")
 
         self._start_thread(
             name="AudioIn",
@@ -70,12 +83,12 @@ class AikoCore:
                 self.activation.handle_timeouts(self.set_state)
 
                 for cmd in self.ctx.commands:
-                    if hasattr(cmd, 'on_tick'):
+                    if getattr(cmd, 'is_active', False):
                         try:
                             cmd.on_tick(self.ctx)
                         except Exception as e:
                             logger.error(f"Core: Ошибка тика в {cmd.__class__.__name__}: {e}")
-                    # ----------------------------------
+                            cmd.is_active = False
 
                 try:
                     data = self.audio.audio_q.get(timeout=0.1)
@@ -92,16 +105,15 @@ class AikoCore:
                 except queue.Empty:
                     continue
 
-
         except KeyboardInterrupt:
-            logger.warning("Core: Остановка по Ctrl+C")
+            logger.warning("Ядро: Остановка по Ctrl+C")
         except Exception:
-            logger.critical("Core: Фатальный сбой", exc_info=True)
+            logger.critical("Ядро: Фатальный сбой", exc_info=True)
         finally:
             self.shutdown()
 
     def shutdown(self):
-        logger.info("Core: Shutdown...")
+        logger.info("Ядро: Shutdown...")
 
         self.stop_event.set()
 
@@ -110,10 +122,10 @@ class AikoCore:
 
         for name, t in self.threads.items():
             if t.is_alive():
-                logger.debug(f"Core: Ожидание {name}")
+                logger.debug(f"Ядро: Ожидание {name}")
                 t.join(timeout=2)
 
-        logger.info("Core: Остановлен корректно.")
+        logger.info("Ядро: Остановлен корректно.")
 
     # =========================
     # Threads & Health
@@ -128,7 +140,7 @@ class AikoCore:
         )
         t.start()
         self.threads[name] = t
-        logger.debug(f"Core: Поток {name} запущен")
+        logger.debug(f"Ядро: Поток {name} запущен")
 
     def _monitor_health(self):
         for name, t in list(self.threads.items()):
@@ -160,6 +172,35 @@ class AikoCore:
             )
 
     # =========================
+    # Audio Status Handler
+    # =========================
+
+    def _handle_audio_status_change(self, is_ok: bool, message: str):
+        """
+        Обработчик изменения статуса аудио.
+        Автоматически обновляет UI статус.
+
+        ИСПРАВЛЕНО: Корректное восстановление предыдущего состояния
+        """
+        if is_ok:
+            # Микрофон работает
+            # Восстанавливаем UI статус через контекст (он сам решит какой статус установить)
+            # Не меняем статус здесь напрямую, т.к. контекст теперь умнее
+            logger.debug(f"Audio: Микрофон восстановлен, текущий UI статус: {self.ctx.ui_status_value}")
+
+            # Если были в blocked из-за проблем с микрофоном, восстанавливаем
+            if self.ctx.ui_status_value == "blocked":
+                # Контекст сам восстановит сохраненный статус
+                self.ctx.set_microphone_state(True, source="audio_restored")
+        else:
+            # Микрофон отвалился - blocked
+            self.set_state("blocked")
+
+        # Показываем уведомление
+        level = "success" if is_ok else "error"
+        self.ctx.ui_output(message, level)
+
+    # =========================
     # Logic
     # =========================
 
@@ -174,13 +215,10 @@ class AikoCore:
 
         if name_triggered:
             self.set_state("active")
-            # --- НОВАЯ ПРОВЕРКА ---
             if not clean_text.strip():
-                logger.info("Core: Получена пустая активация (имя без команды). Ожидаю ввод...")
+                logger.info("Ядро: Получена пустая активация (имя без команды). Ожидаю ввод...")
                 self.activation.refresh_activation()
-                # Здесь можно вызвать self.ctx.reply("Слушаю") или пискнуть
                 return
-                # ----------------------
 
         executed = self.router.route(clean_text, self.ctx)
 
@@ -194,8 +232,18 @@ class AikoCore:
     # =========================
 
     def set_state(self, new_state: str):
+        """
+        Устанавливает состояние системы и автоматически обновляет UI статус.
+
+        Маппинг состояний:
+        - init → init
+        - idle → idle
+        - active → active
+        - blocked → blocked
+        """
         if self.ctx.state != new_state:
             logger.debug(f"Core: state {self.ctx.state} → {new_state}")
             self.ctx.state = new_state
-            if self.ctx.ui_status:
-                self.ctx.ui_status(new_state)
+
+            # Обновляем UI статус (автоматически обновит трей и другие UI элементы)
+            self.ctx.set_ui_status(new_state, source="core_state_change")

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import sqlite3
 import json
 import os
@@ -11,9 +12,14 @@ class DBManager:
     Отказоустойчивое хранилище данных.
     Реализует паттерны: Integrity Guard (контроль целостности) и
     Outbox (очередь сообщений для внешних сервисов).
+
+    ИСПРАВЛЕНО: Добавлен timeout во все операции с БД
     """
 
-    def __init__(self, db_path="aiko_data.db"):
+    # ИСПРАВЛЕНИЕ: Константа для timeout
+    DB_TIMEOUT = 10  # секунд
+
+    def __init__(self, db_path="data/aiko_data.db"):
         self.db_path = db_path
         self.is_functional = False
         self.was_recovered = False
@@ -25,18 +31,18 @@ class DBManager:
         conn = None
         try:
             if os.path.exists(self.db_path):
-                # Открываем соединение без контекстного менеджера для ручного контроля
-                conn = sqlite3.connect(self.db_path)
+                # ИСПРАВЛЕНИЕ: Добавлен timeout
+                conn = sqlite3.connect(self.db_path, timeout=self.DB_TIMEOUT)
                 res = conn.execute("PRAGMA integrity_check").fetchone()
                 if res[0] != "ok":
                     raise sqlite3.DatabaseError("Integrity check failed")
 
                 conn.execute("PRAGMA journal_mode=WAL")
-                conn.close()  # Закрываем перед основной стадией
+                conn.close()
 
             self._create_tables()
             self.is_functional = True
-            logger.info("DB: Система запущена в штатном режиме (WAL enabled).")
+            logger.info("DB: База данных запущена.")
         except (sqlite3.DatabaseError, sqlite3.OperationalError) as e:
             logger.error(f"DB: Обнаружено повреждение базы: {e}")
             if conn:
@@ -64,7 +70,8 @@ class DBManager:
 
     def _create_tables(self):
         """Создание схемы данных с индексами."""
-        with sqlite3.connect(self.db_path) as conn:
+        # ИСПРАВЛЕНИЕ: Добавлен timeout
+        with sqlite3.connect(self.db_path, timeout=self.DB_TIMEOUT) as conn:
             # Настройка режима для КАЖДОГО нового подключения или создания
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")  # Оптимально для WAL
@@ -116,23 +123,27 @@ class DBManager:
     # --- SCHEDULER ---
 
     def add_task(self, task_type, payload, exec_at):
-        if not self.is_functional: return False
+        if not self.is_functional:
+            return False
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            # ИСПРАВЛЕНИЕ: Добавлен timeout
+            with sqlite3.connect(self.db_path, timeout=self.DB_TIMEOUT) as conn:
                 conn.execute(
                     "INSERT INTO scheduler (type, payload, exec_at) VALUES (?, ?, ?)",
                     (task_type, self._to_json(payload), exec_at)
                 )
             return True
         except Exception as e:
-            self._report_runtime_error(e);
+            self._report_runtime_error(e)
             return False
 
     def get_pending_tasks(self):
-        if not self.is_functional: return []
+        if not self.is_functional:
+            return []
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
-            with sqlite3.connect(self.db_path, timeout=10) as conn:
+            # ИСПРАВЛЕНИЕ: timeout уже был здесь, но оставляем для консистентности
+            with sqlite3.connect(self.db_path, timeout=self.DB_TIMEOUT) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT id, type, payload FROM scheduler WHERE exec_at <= ? AND status = 'pending'",
@@ -140,13 +151,15 @@ class DBManager:
                 )
                 return cursor.fetchall()
         except Exception as e:
-            self._report_runtime_error(e);
+            self._report_runtime_error(e)
             return []
 
     def update_task_status(self, task_id, status='done'):
-        if not self.is_functional: return
+        if not self.is_functional:
+            return
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            # ИСПРАВЛЕНИЕ: Добавлен timeout
+            with sqlite3.connect(self.db_path, timeout=self.DB_TIMEOUT) as conn:
                 conn.execute("UPDATE scheduler SET status = ? WHERE id = ?", (status, task_id))
         except Exception as e:
             self._report_runtime_error(e)
@@ -154,20 +167,25 @@ class DBManager:
     # --- KV STORE ---
 
     def set_val(self, key, value):
-        if not self.is_functional: return
+        if not self.is_functional:
+            return
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            # ИСПРАВЛЕНИЕ: Добавлен timeout
+            with sqlite3.connect(self.db_path, timeout=self.DB_TIMEOUT) as conn:
                 conn.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)",
                              (key, self._to_json(value)))
         except Exception as e:
             self._report_runtime_error(e)
 
     def get_val(self, key, default=None):
-        if not self.is_functional: return default
+        if not self.is_functional:
+            return default
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            # ИСПРАВЛЕНИЕ: Добавлен timeout
+            with sqlite3.connect(self.db_path, timeout=self.DB_TIMEOUT) as conn:
                 row = conn.execute("SELECT value FROM kv_store WHERE key = ?", (key,)).fetchone()
-                if not row: return default
+                if not row:
+                    return default
 
                 raw_val = row[0]
                 try:
@@ -181,49 +199,55 @@ class DBManager:
     # --- TELEGRAM OUTBOX ---
 
     def add_tg_message(self, text, priority=0):
-        if not self.is_functional: return False
+        if not self.is_functional:
+            return False
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            # ИСПРАВЛЕНИЕ: Добавлен timeout
+            with sqlite3.connect(self.db_path, timeout=self.DB_TIMEOUT) as conn:
                 conn.execute(
                     "INSERT INTO tg_outbox (message, priority, created_at) VALUES (?, ?, ?)",
                     (text, priority, now)
                 )
             return True
         except Exception as e:
-            logger.error(f"DB Outbox Error: {e}");
+            logger.error(f"DB Outbox Error: {e}")
             return False
 
     def get_pending_tg_messages(self):
-        if not self.is_functional: return []
+        if not self.is_functional:
+            return []
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            # ИСПРАВЛЕНИЕ: Добавлен timeout
+            with sqlite3.connect(self.db_path, timeout=self.DB_TIMEOUT) as conn:
                 return conn.execute(
                     "SELECT id, message, created_at FROM tg_outbox WHERE status = 'pending' ORDER BY id ASC"
                 ).fetchall()
         except Exception as e:
-            logger.error(f"DB: Error reading TG queue: {e}");
+            logger.error(f"DB: Error reading TG queue: {e}")
             return []
 
     def mark_tg_sent(self, msg_id):
         """Удаляет сообщение или переводит в архив (Status Change)."""
-        if not self.is_functional: return
+        if not self.is_functional:
+            return
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                # В твоей версии удаление — это ок для экономии места,
-                # но для отладки лучше сменить статус
+            # ИСПРАВЛЕНИЕ: Добавлен timeout
+            with sqlite3.connect(self.db_path, timeout=self.DB_TIMEOUT) as conn:
                 conn.execute("DELETE FROM tg_outbox WHERE id = ?", (msg_id,))
         except Exception as e:
             logger.error(f"DB: Sent mark error: {e}")
 
     def delete_task(self, task_id):
-        if not self.is_functional: return False
+        if not self.is_functional:
+            return False
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            # ИСПРАВЛЕНИЕ: Добавлен timeout
+            with sqlite3.connect(self.db_path, timeout=self.DB_TIMEOUT) as conn:
                 conn.execute("DELETE FROM scheduler WHERE id = ?", (task_id,))
             return True
         except Exception as e:
-            self._report_runtime_error(e);
+            self._report_runtime_error(e)
             return False
 
 

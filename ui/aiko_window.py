@@ -4,6 +4,10 @@ import ctypes
 from PySide6.QtWidgets import QApplication, QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout
 from PySide6.QtCore import Qt, QTimer, QDateTime, QRectF, QPoint, QPropertyAnimation, QEasingCurve, Property
 from PySide6.QtGui import QPainter, QColor, QPixmap, QPainterPath, QTransform
+from PySide6.QtCore import Qt, QTimer, QDateTime, QRectF, QPoint, QPropertyAnimation, QEasingCurve, Property, Slot
+from utils.logger import logger
+from utils.audio_player import audio_manager
+from core.global_context import ctx
 
 try:
     myappid = 'strategy.advisor.adaptive.v1'
@@ -23,8 +27,20 @@ class CharacterWidget(QWidget):
 
         # Загрузка изображения персонажа
         self.character_pixmap = None
+
+        # ДОБАВИТЬ:
+        self.default_pixmap = None
+        self.click_pixmap = None
+        self._default_path = character_path  # просто запомним
+
         if character_path and os.path.exists(character_path):
-            self.character_pixmap = QPixmap(character_path)
+            self.default_pixmap = QPixmap(character_path)
+            self.character_pixmap = self.default_pixmap
+
+            # ДОБАВИТЬ: пробуем загрузить ai2.png рядом
+            ai2_path = os.path.join(os.path.dirname(character_path), "ai2.png")
+            if os.path.exists(ai2_path):
+                self.click_pixmap = QPixmap(ai2_path)
 
         # --- АНИМАЦИЯ ДЛЯ ПЕРСОНАЖА ---
         # Масштаб персонажа (для эффекта hover)
@@ -39,9 +55,22 @@ class CharacterWidget(QWidget):
         self.character_rotation_animation = QPropertyAnimation(self, b"character_rotation")
         self.character_rotation_animation.setDuration(400)  # Увеличил длительность для плавности
         self.character_rotation_animation.setEasingCurve(QEasingCurve.InOutCubic)  # Плавная кривая вместо Elastic
+        self.character_rotation_animation.finished.connect(self._restore_default_pixmap)
 
         # Включаем отслеживание мыши
         self.setMouseTracking(True)
+
+    def _set_pixmap_safe(self, pixmap: QPixmap | None):
+        if pixmap is None or pixmap.isNull():
+            return
+        self.character_pixmap = pixmap
+        self.update()
+
+    def _restore_default_pixmap(self):
+        if self.default_pixmap is None or self.default_pixmap.isNull():
+            return
+        self.character_pixmap = self.default_pixmap
+        self.update()
 
     # --- PROPERTY ДЛЯ АНИМАЦИИ ПЕРСОНАЖА (МАСШТАБ) ---
     def get_character_scale(self):
@@ -117,7 +146,8 @@ class CharacterWidget(QWidget):
         if not self.hitTest(event.position().toPoint()):
             event.ignore()
             return
-
+        if self.click_pixmap and not self.click_pixmap.isNull():
+            self._set_pixmap_safe(self.click_pixmap)
         self.character_rotation_animation.stop()
         self.character_rotation_animation.setDuration(400)
         self.character_rotation_animation.setStartValue(0.0)
@@ -301,7 +331,7 @@ class AikoWindow(QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(None)
 
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.mic_enabled = True  # Состояние микрофона
         self.focus_enabled = False  # Состояние режима концентрации
@@ -311,7 +341,7 @@ class AikoWindow(QWidget):
         # Расчет scale_factor относительно Full HD (1920)
         screen_geometry = QApplication.primaryScreen().geometry()
         self.scale_factor = screen_geometry.width() / 1920.0
-
+        self._signal_connected = False  # Флаг для отслеживания подключения сигнала
         # Размеры теперь умножаются на коэффициент
         self.content_width = int(1000 * self.scale_factor)
         self.content_height = int(600 * self.scale_factor)
@@ -505,6 +535,7 @@ class AikoWindow(QWidget):
         self.circle_button_7 = AnimatedButton(main_container, "circle7", circle_icon_size)
         self.circle_button_7.setObjectName("circle_button")
         self.circle_button_7.setFixedSize(circle_widget_size, circle_widget_size)
+        self.circle_button_7.clicked.connect(self.circle_button_7_click)
         circle_buttons_layout.addWidget(self.circle_button_7)
 
         # Добавляем растяжку снизу, чтобы кнопки были прижаты к верхнему краю
@@ -544,21 +575,21 @@ class AikoWindow(QWidget):
         # --- БЛОК ТЕКСТОВ (вертикальный лэйаут) ---
         signal_layout = QVBoxLayout()
         signal_layout.setContentsMargins(0, 0, 0, 0)
-        signal_layout.setSpacing(0)
+        signal_layout.setSpacing(8)
 
         # Размеры шрифтов для текстов сигнала
         signal_title_font_size = int(18 * self.scale_factor)
-        signal_text_font_size = int(14 * self.scale_factor)
+        signal_text_font_size = int(15 * self.scale_factor)
 
         # Заголовок сигнала (когда ожидается следующий сигнал)
         self.signal_title = QLabel("Следующий сигнал через два часа три минуты", main_container)
         self.signal_title.setObjectName("signal_title")
-        self.signal_title.setStyleSheet(f"font-size: {signal_title_font_size}px; margin: 0; padding: 0;")
+        self.signal_title.setStyleSheet(f"font-size: {signal_title_font_size}px; margin: 0, 0, 0, 0 ; padding: 0, 0, 0, 0;")
 
         # Текст сигнала (описание сигнала)
         self.signal_text = QLabel("Текст сигнала", main_container)
         self.signal_text.setObjectName("signal_text")
-        self.signal_text.setStyleSheet(f"font-size: {signal_text_font_size}px; margin: 0; padding: 0;")
+        self.signal_text.setStyleSheet(f"font-size: {signal_text_font_size}px; margin: 0, 0, 0, 0; padding: 0;")
 
         # Добавляем метки в вертикальный лэйаут
         signal_layout.addWidget(self.signal_title, 0, Qt.AlignLeft | Qt.AlignBottom)
@@ -703,37 +734,74 @@ class AikoWindow(QWidget):
         self.ctx = ctx
         self.core = core
 
-        # Регистрируем коллбек для получения уведомлений об изменении состояния
-        self.ctx.register_state_callback(self._on_state_changed)
+        # КРИТИЧНО: Подключаемся к Qt сигналу вместо прямого callback
+        # Используем Qt.UniqueConnection чтобы избежать дублирования
+        if self.ctx.signals:
+            # ИСПРАВЛЕНИЕ: Используем только UniqueConnection без disconnect
+            # Qt.UniqueConnection автоматически предотвратит дублирование
+            self.ctx.signals.state_changed.connect(
+                self._on_state_changed,
+                Qt.UniqueConnection
+            )
 
         # Сразу синхронизируем состояние кнопок с реальным состоянием системы
         self._sync_button_states()
 
+    @Slot(str, bool)
     def _on_state_changed(self, state_name: str, new_value: bool):
         """
-        Коллбек, вызываемый при изменении состояния в ctx
-        Обновляет иконки кнопок при изменении состояния из любого источника
+        Коллбек, вызываемый при изменении состояния в ctx.
+        БЕЗОПАСНО: Вызывается через Qt сигнал из любого потока!
         """
+        # КРИТИЧНО: Проверяем что окно не закрыто
+        try:
+            if not self.isVisible():
+                return
+        except RuntimeError:
+            # Окно уже удалено C++ движком
+            return
+
         if state_name == "microphone":
             self.mic_enabled = new_value
             icon_name = "square2.png" if new_value else "square2off.png"
             icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons", icon_name)
-            if hasattr(self, 'square_button_2'):
-                self.square_button_2.icon_pixmap = QPixmap(icon_path) if os.path.exists(icon_path) else None
-                self.square_button_2.update()
+
+            # КРИТИЧНО: Безопасная проверка существования виджета
+            try:
+                if hasattr(self, 'square_button_2') and self.square_button_2 is not None:
+                    self.square_button_2.icon_pixmap = QPixmap(icon_path) if os.path.exists(icon_path) else None
+                    self.square_button_2.update()
+            except RuntimeError:
+                # Кнопка уже удалена - это нормально
+                pass
 
         elif state_name == "focus_mode":
             self.focus_enabled = new_value
 
-            # ИСПРАВЛЕНО: правильная логика выбора иконки
             if new_value:
-                # Режим ВКЛЮЧЕН - пробуем загрузить square5on.png
                 icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5off.png")
                 if not os.path.exists(icon_path):
-                    # Если нет, используем обычную square5.png
                     icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5.png")
             else:
-                # Режим ВЫКЛЮЧЕН - используем square5.png
+                icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5.png")
+
+            # КРИТИЧНО: Безопасная проверка существования виджета
+            try:
+                if hasattr(self, 'square_button_5') and self.square_button_5 is not None:
+                    self.square_button_5.icon_pixmap = QPixmap(icon_path) if os.path.exists(icon_path) else None
+                    self.square_button_5.update()
+            except RuntimeError:
+                # Кнопка уже удалена - это нормально
+                pass
+
+        elif state_name == "focus_mode":
+            self.focus_enabled = new_value
+
+            if new_value:
+                icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5off.png")
+                if not os.path.exists(icon_path):
+                    icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5.png")
+            else:
                 icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5.png")
 
             if hasattr(self, 'square_button_5'):
@@ -741,32 +809,48 @@ class AikoWindow(QWidget):
                 self.square_button_5.update()
 
     def _sync_button_states(self):
-        """Синхронизирует иконки кнопок с реальным состоянием из ctx"""
+        """Синхронизирует иконки кнопок с РЕАЛЬНЫМ состоянием из ctx и аудио-потока"""
         if not self.ctx or not self.core:
             return
 
-        # Синхронизация микрофона из ctx
-        self.mic_enabled = self.ctx.microphone_enabled
-        icon_name = "square2.png" if self.mic_enabled else "square2off.png"
+        # КРИТИЧНО: Синхронизируем с РЕАЛЬНЫМ состоянием аудио-потока
+        try:
+            real_stream_state = self.core.audio.get_stream_state()
+        except Exception as e:
+            logger.error(f"Window: Не удалось получить состояние потока: {e}")
+            real_stream_state = False
+
+        # Если состояния расходятся - синхронизируем
+        if self.ctx.microphone_enabled != real_stream_state:
+            logger.warning(
+                f"Window: Обнаружено расхождение состояний! "
+                f"ctx={self.ctx.microphone_enabled}, stream={real_stream_state}. "
+                f"Синхронизация с реальным состоянием потока."
+            )
+            self.ctx.microphone_enabled = real_stream_state
+
+        # Обновляем UI по реальному состоянию
+        self.mic_enabled = real_stream_state
+        icon_name = "square2.png" if real_stream_state else "square2off.png"
         icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons", icon_name)
-        self.square_button_2.icon_pixmap = QPixmap(icon_path) if os.path.exists(icon_path) else None
-        self.square_button_2.update()
+
+        if hasattr(self, 'square_button_2'):
+            self.square_button_2.icon_pixmap = QPixmap(icon_path) if os.path.exists(icon_path) else None
+            self.square_button_2.update()
 
         # Синхронизация режима концентрации из ctx
         self.focus_enabled = self.ctx.focus_mode_active
 
-        # ИСПРАВЛЕНО: правильная логика выбора иконки
         if self.focus_enabled:
-            # Режим ВКЛЮЧЕН
             icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5off.png")
             if not os.path.exists(icon_path):
                 icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5.png")
         else:
-            # Режим ВЫКЛЮЧЕН
             icon_path = os.path.join(os.path.dirname(__file__), "../assets/images/icons/square5.png")
 
-        self.square_button_5.icon_pixmap = QPixmap(icon_path) if os.path.exists(icon_path) else None
-        self.square_button_5.update()
+        if hasattr(self, 'square_button_5'):
+            self.square_button_5.icon_pixmap = QPixmap(icon_path) if os.path.exists(icon_path) else None
+            self.square_button_5.update()
 
     def _get_focus_plugin(self):
         """Находит плагин FocusManager"""
@@ -779,14 +863,21 @@ class AikoWindow(QWidget):
         return None
 
     def toggle_microphone(self):
-        """Переключает состояние микрофона через централизованное управление"""
+        """
+        Переключает состояние микрофона через централизованное управление.
+        Все обновления UI произойдут автоматически через callback систему.
+        """
         if not self.core or not self.ctx:
             print("Ошибка: контекст не установлен")
             return
 
         new_state = not self.ctx.microphone_enabled
 
-        # Обновляем состояние в ctx (это вызовет коллбек _on_state_changed)
+        # Обновляем состояние в ctx
+        # Это автоматически:
+        # 1. Обновит self.mic_enabled через _on_state_changed
+        # 2. Обновит иконку кнопки
+        # 3. Обновит UI статус (включая трей)
         if not self.ctx.set_microphone_state(new_state, source="gui"):
             return  # Состояние не изменилось
 
@@ -794,7 +885,7 @@ class AikoWindow(QWidget):
             self.ctx.ui_output("Микрофон включен", "success")
         else:
             self.ctx.ui_output("Микрофон выключен", "info")
-            # Очищаем очередь аудио, чтобы не обработать старые данные
+            # Очищаем очередь аудио
             with self.core.audio.audio_q.mutex:
                 self.core.audio.audio_q.queue.clear()
 
@@ -820,12 +911,11 @@ class AikoWindow(QWidget):
         if new_state:
             # ВКЛЮЧАЕМ режим концентрации
             focus_plugin.is_active = True
-            self.ctx.ui_output("Режим концентрации ВКЛЮЧЕН", "error")
+            self.ctx.ui_output("Активирован режим концентрации", "success", play_sound=False)
 
             # Проигрываем звук
             try:
-                from utils.audio_player import audio_manager
-                audio_manager.play.alarm()
+                audio_manager.play.focus_start()
             except Exception as e:
                 print(f"Ошибка воспроизведения звука: {e}")
         else:
@@ -833,8 +923,30 @@ class AikoWindow(QWidget):
             focus_plugin.is_active = False
             if hasattr(focus_plugin, '_hide_vignette'):
                 focus_plugin._hide_vignette()
+            audio_manager.play.complete()
+            self.ctx.ui_output("Режим концентрации выключен", "success", play_sound=False)
 
-            self.ctx.ui_output("Режим концентрации выключен", "info")
+    def closeEvent(self, event):
+        """Безопасное закрытие окна с отпиской от всех сигналов"""
+        # Отписываемся от сигналов ПЕРЕД закрытием
+        if self.ctx and self.ctx.signals:
+            try:
+                self.ctx.signals.state_changed.disconnect(self._on_state_changed)
+            except (RuntimeError, TypeError):
+                # Уже отписаны или сигналы удалены
+                pass
+
+        # Помечаем окно как закрывающееся
+        self.setVisible(False)
+
+        # Вызываем родительский обработчик
+        super().closeEvent(event)
+
+    def circle_button_7_click(self):
+        from ui.chat_window import ChatWindow
+        context = ctx()
+        context.open_ui("chat_window")
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

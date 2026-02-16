@@ -1,0 +1,22 @@
+{
+    "bot": {
+        "name": "Айко"
+    },
+    "audio": {
+        "device_id": 1,
+        "samplerate": 16000,
+        "master_volume": 0.7,
+        "match_threshold": 80
+    },
+    "stt-model": {
+        "path": "model"
+    },
+    "trigger": {
+        "active_window": 5.0,
+        "post_command_window": 3.0
+    },
+    "debug": {
+        "log_commands": true,
+        "matcher_debug": true
+    }
+}

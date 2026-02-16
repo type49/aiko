@@ -67,7 +67,7 @@ class TestConfigManager:
     
     def test_autosave(self, temp_dir):
         """Проверка автосохранения"""
-        config_path = temp_dir / "config.json"
+        config_path = temp_dir / "data/config.json"
         cfg = ConfigManager(str(config_path))
         
         cfg.set("test.value", 123, autosave=True)

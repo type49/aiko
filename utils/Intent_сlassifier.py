@@ -77,7 +77,7 @@ class IntentClassifier:
         self.intent_to_plugin = current_mapping
 
         if len(data_dict) < 2:
-            logger.warning("NLU: Недостаточно samples для ML (минимум 2 класса). Работаем только на триггерах.")
+            logger.info("NLU: Недостаточно samples для ML (минимум 2 класса). Работаем только на триггерах.")
             return
 
         new_hash = self._calculate_data_hash(data_dict)

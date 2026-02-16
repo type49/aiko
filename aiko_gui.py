@@ -19,9 +19,7 @@ class AikoApp(QObject):
         self.signals = AikoSignals()
         self.ctx.signals = self.signals
 
-
         # 2. Компоненты (сначала создаем, потом биндим!)
-
         from ui.tray import AikoTray
         self.popup = ctx.ui_manager
         self.assistant_msg = AikoMessages()  # Менеджер сообщений ассистента
@@ -35,8 +33,15 @@ class AikoApp(QObject):
         logger.info("GUI: Система управления интерфейсами стабилизирована.")
 
     def _bind_context(self):
-        """Проброс управления в глобальный контекст ctx."""
-        self.ctx.ui_output = self._handle_ui_output
+        """
+        Проброс управления в глобальный контекст ctx.
+
+        ИСПРАВЛЕНИЕ: НЕ переопределяем ctx.ui_output, так как он теперь
+        напрямую вызывает ui_manager.add_item()
+        """
+        # УДАЛЕНО: self.ctx.ui_output = self._handle_ui_output
+        # Теперь ctx.ui_output работает напрямую с ui_manager
+
         self.ctx.open_ui = self.open_ui
         self.ctx.ui_status = self.tray.update_icon
         self.ctx.ui_audio_status = self.signals.audio_status_changed.emit
@@ -44,8 +49,9 @@ class AikoApp(QObject):
     def _connect_signals(self):
         """Внутренняя шина сигналов Qt."""
         self.signals.show_window.connect(self._universal_loader)
-        # self.signals.display_message.connect(self.receive_message)
-        self.signals.display_message.connect(self.popup.add_item)
+        # Сигнал display_message больше не используется, так как
+        # ui_output напрямую вызывает popup.add_item
+        # self.signals.display_message.connect(self.popup.add_item)
 
         self.signals.audio_status_changed.connect(self._handle_audio_status_change)
 
@@ -123,20 +129,17 @@ class AikoApp(QObject):
         window.show()
         logger.debug(f"GUI: Окно {name} зарегистрировано. Активных окон: {len(self._windows)}")
 
-
-    def _handle_ui_output(self, text, level="info", priority=None, message=False, duration=None):
-
-        if message:
-            # Центральное сообщение от ассистента
-            self.assistant_msg.show_message(str(text), duration)
-        else:
-            # Обычное уведомление сбоку
-            self.signals.display_message.emit(str(text), level, priority)
-
-
     def _handle_audio_status_change(self, is_ok, message):
+        """Обработчик изменения статуса аудио"""
         self.core.set_state("idle" if is_ok else "blocked")
-        self._handle_ui_output(message, "success" if is_ok else "error")
+
+        # Используем ctx.ui_output для уведомлений
+        self.ctx.ui_output(
+            text=message,
+            level="success" if is_ok else "error",
+            play_sound=True
+        )
+
         self.tray.update_icon(is_ok)
 
     def quit_app(self):
