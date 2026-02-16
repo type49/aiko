@@ -1,11 +1,11 @@
 import sys
-from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton
-from PySide6.QtCore import Qt, QTimer, QDateTime, QPropertyAnimation, QEasingCurve, QPoint
+from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QGraphicsOpacityEffect
+from PySide6.QtCore import Qt, QTimer, QDateTime, QPropertyAnimation, QEasingCurve, QPoint, QThread, Signal
 from PySide6.QtGui import QFont, QPainter, QColor
 import psutil
 import subprocess
 import platform
-
+from utils.gamemode import GameMode
 
 class EdgeButton(QWidget):
     """Тонкая вертикальная кнопка-вкладка на краю экрана"""
@@ -54,11 +54,19 @@ class EdgeButton(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self.parent_window.toggle_visibility()
 
+class GameModeWorker(QThread):
+    finished = Signal(dict)
+
+    def run(self):
+        gm = GameMode()
+        result = gm.activate()
+        self.finished.emit(result)
+
 
 class LiquidGlassWindow(QWidget):
-    def __init__(self):
+    def __init__(self, ctx):
         super().__init__()
-
+        self.ctx = ctx
         # Геометрия с учетом панели задач
         screen_geo = QApplication.primaryScreen().availableGeometry()
         self.panel_width = int(screen_geo.width() * 0.2)
@@ -349,9 +357,9 @@ class LiquidGlassWindow(QWidget):
         quick_buttons_layout.addWidget(settings_btn)
 
         # Terminal
-        terminal_btn = self.create_quick_button("💻", "Terminal")
-        terminal_btn.clicked.connect(self.open_terminal)
-        quick_buttons_layout.addWidget(terminal_btn)
+        self.gamemode_btn = self.create_quick_button("🧹", "Gamemode")
+        self.gamemode_btn.clicked.connect(self.gamemode_button)
+        quick_buttons_layout.addWidget(self.gamemode_btn)
 
         main_layout.addLayout(quick_buttons_layout)
         main_layout.addSpacing(20)
@@ -382,7 +390,6 @@ class LiquidGlassWindow(QWidget):
         layout.addStretch()
         layout.addWidget(value)
 
-        # Сохраняем ссылку на value для обновления
         setattr(self, f"{label_text.lower()}_value", value)
 
         return layout
@@ -432,27 +439,59 @@ class LiquidGlassWindow(QWidget):
         else:
             subprocess.Popen(['gnome-control-center'])
 
-    def open_terminal(self):
-        """Открыть терминал"""
-        if platform.system() == 'Windows':
-            subprocess.Popen('wt', shell=True)  # Windows Terminal
-        else:
-            subprocess.Popen(['gnome-terminal'])
+    def gamemode_button(self):
+        if not self.gamemode_btn.graphicsEffect():
+            self.opacity_effect = QGraphicsOpacityEffect(self.gamemode_btn)
+            self.gamemode_btn.setGraphicsEffect(self.opacity_effect)
+
+        self.animation = QPropertyAnimation(self.gamemode_btn.graphicsEffect(), b"opacity")
+        self.animation.setDuration(500)
+        self.animation.setStartValue(1.0)
+        self.animation.setEndValue(0.4)
+        self.animation.setEasingCurve(QEasingCurve.InOutQuad)
+        self.animation.setLoopCount(-1)
+        self.animation.start()
+
+        self.gamemode_btn.setEnabled(False)
+
+        self.thread = GameModeWorker()
+        self.thread.finished.connect(self.on_gamemode_finished)
+        self.thread.start()
+
+    def on_gamemode_finished(self, stats):
+        """Вызывается автоматически, когда скрипт закончил работу"""
+        if hasattr(self, 'animation'):
+            self.animation.stop()
+        if self.gamemode_btn.graphicsEffect():
+            self.gamemode_btn.graphicsEffect().setOpacity(1.0)
+        self.gamemode_btn.setEnabled(True)
+
+        freed_ram = stats.get('freed_ram', 0)
+        apps_names = stats.get('killed_apps_names', [])
+
+        apps_str = ", ".join(apps_names).replace("_", "\\_")
+
+        res_msg = (
+            f"Оптимизация завершена\n"
+            f"Освобождено: {freed_ram} MB\n"
+            f"Закрыто программ: {len(apps_names)}\n"
+            f"Список: {apps_str}"
+        )
+
+        self.ctx.broadcast(res_msg, ui=True, tg=False)
+
 
     def update_data(self):
         """Обновление данных с оптимизацией"""
         try:
-            # Обновление времени и даты
             now = QDateTime.currentDateTime()
             self.time_label.setText(now.toString("HH:mm"))
             self.date_label.setText(now.toString("ddd dd").upper())
             self.full_date_label.setText(now.toString("MMMM").upper())
 
-            # CPU
             cpu_percent = psutil.cpu_percent(interval=None)
             self.cpu_value.setText(f"{cpu_percent:.1f}%")
 
-            # Сеть - общий трафик
             net_io = psutil.net_io_counters()
             if self.last_net_bytes is None:
                 self.last_net_bytes = net_io.bytes_sent + net_io.bytes_recv

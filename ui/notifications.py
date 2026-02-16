@@ -12,7 +12,6 @@ from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QPoint, QObject, QEas
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import QGraphicsBlurEffect
 from PySide6.QtMultimedia import QSoundEffect
-from utils.audio_player import audio_manager
 
 
 # ============================================================
@@ -31,7 +30,7 @@ class ToastConfig:
     slide_duration: int = 280
     auto_hide_delay: int = 5000
     reposition_duration: int = 200
-    max_toasts: int = 5  # ИСПРАВЛЕНИЕ: Максимальное количество одновременных тостов
+    max_toasts: int = 5
 
 
 # ============================================================
@@ -39,7 +38,7 @@ class ToastConfig:
 # ============================================================
 
 class ToastStyles:
-    """Центр��лизованные стили для тостов"""
+    """Централизованные стили для тостов"""
 
     ACCENTS = {
         "info": "#0A84FF",
@@ -262,12 +261,69 @@ class ToastItem(QWidget):
         self.hide_slide_anim.finished.connect(self._destroy)
 
     def _play_sound(self):
-        """Воспроизведение звука"""
+        """Воспроизведение звука
+
+        ИСПРАВЛЕНО: Правильный вызов audio_manager с учетом структуры AudioNamespace
+        """
+        if not self.play_sound:
+            print("LOG: [Toast] play_sound=False, звук отключен")
+            return
+
         try:
-            if self.play_sound:
-                audio_manager.play.notify()
-        except Exception:
-            print("LOG: [Toast] Notification sound file missing, skipping sound.")
+            # Импортируем audio_manager
+            try:
+                from utils.audio_player import audio_manager
+            except ImportError as e:
+                print(f"LOG: [Toast] Не удалось импортировать audio_manager: {e}")
+                return
+
+            # Проверяем что audio_manager существует
+            if audio_manager is None:
+                print("LOG: [Toast] audio_manager is None")
+                return
+
+            # Проверяем что audio_manager инициализирован
+            if not hasattr(audio_manager, '_initialized') or not audio_manager._initialized:
+                print("LOG: [Toast] audio_manager не инициализирован")
+                return
+
+            # Проверяем что есть атрибут play (AudioNamespace)
+            if not hasattr(audio_manager, 'play'):
+                print("LOG: [Toast] У audio_manager нет атрибута 'play'")
+                return
+
+            # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ:
+            # audio_manager.play.notify возвращает ЛЯМБДУ, которую нужно ВЫЗВАТЬ
+            # Правильно: audio_manager.play.notify()
+            # Неправильно: audio_manager.play.notify (это лямбда, не вызов)
+
+            print("LOG: [Toast] Попытка воспроизвести звук notify...")
+
+            # Получаем функцию notify из AudioNamespace
+            notify_func = audio_manager.play.notify
+
+            # Проверяем что это callable
+            if not callable(notify_func):
+                print(f"LOG: [Toast] notify_func не является callable: {type(notify_func)}")
+                return
+
+            # ВЫЗЫВАЕМ лямбду с параметрами (если нужно)
+            channel = notify_func(volume=0.7)  # Можно передать volume и другие параметры
+
+            if channel:
+                print("LOG: [Toast] Звук успешно воспроизведен!")
+            else:
+                print("LOG: [Toast] Звук не воспроизведен (channel=None), возможно файл не найден")
+
+        except AttributeError as e:
+            print(f"LOG: [Toast] AttributeError при воспроизведении звука: {e}")
+            print(f"LOG: [Toast] Доступные атрибуты audio_manager: {dir(audio_manager)}")
+        except FileNotFoundError as e:
+            print(f"LOG: [Toast] Файл звука не найден: {e}")
+        except Exception as e:
+            print(f"LOG: [Toast] Неожиданная ошибка при воспроизведении звука: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
 
     def reposition(self, index: int, animated: bool = False):
         """Установка позиции тоста"""
@@ -363,12 +419,8 @@ class ToastItem(QWidget):
 # ============================================================
 
 class PopupNotification(QObject):
-    """
-    Менеджер уведомлений
-
-    ИСПРАВЛЕНО: Добавлено ограничение на максимальное количество тостов
-    """
-    _request_toast = Signal(str, str, bool, object, object)
+    """Менеджер уведомлений"""
+    _request_toast = Signal(str, str, object, object, bool)
 
     def __init__(self, config: Optional[ToastConfig] = None):
         super().__init__()
@@ -390,24 +442,23 @@ class PopupNotification(QObject):
                  priority: Optional[str] = None,
                  lifetime: Optional[int] = None):
         """Показать уведомление"""
+        # ДИАГНОСТИКА
+        print(f"LOG: [PopupNotification.add_item] play_sound={play_sound} (type={type(play_sound).__name__})")
+
         # 1. Проверка фильтров
         if any(f(text) for f in self._filters):
             return
         self._request_toast.emit(text, msg_type, priority, lifetime, play_sound)
 
     def _internal_create_toast(self, text, msg_type, priority, lifetime, play_sound):
-        """
-        ОПАСНЫЙ метод. Работает ТОЛЬКО в GUI-потоке.
-        Сюда мы попадаем через сигнал.
+        """Создание тоста в GUI-потоке через сигнал"""
+        # ДИАГНОСТИКА
+        print(f"LOG: [_internal_create_toast] play_sound={play_sound} (type={type(play_sound).__name__})")
 
-        ИСПРАВЛЕНО: Добавлена проверка максимального количества тостов
-        """
-        # ИСПРАВЛЕНИЕ: Удаляем старые тосты если превышен лимит
+        # Удаляем старые тосты если превышен лимит
         if len(self.active_toasts) >= self.config.max_toasts:
-            # Удаляем самый старый тост (последний в списке)
             oldest_toast = self.active_toasts[-1]
             oldest_toast.hide_toast()
-            # Не удаляем из списка здесь - это сделает remove_item при завершении анимации
 
         toast = ToastItem(
             text=text,
@@ -427,11 +478,10 @@ class PopupNotification(QObject):
         """Удалить тост из списка активных"""
         if item in self.active_toasts:
             self.active_toasts.remove(item)
-            # Анимированно подтягиваем оставшиеся тосты на свободные места
             self._reposition_all(animated=True)
 
     def _reposition_all(self, animated: bool):
-        """Обновить позиции всех тостов согласно их индексу в списке"""
+        """Обновить позиции всех тостов"""
         for i, toast in enumerate(self.active_toasts):
             toast.reposition(i, animated=animated)
 

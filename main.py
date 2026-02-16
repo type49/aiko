@@ -76,7 +76,7 @@ if __name__ == "__main__":
     # Инициализация сервисов
     tg_service = AikoTelegramService(ctx, core)
     aiko_gui = AikoApp(ctx, core)
-    left_widget = LiquidGlassWindow()
+    left_widget = LiquidGlassWindow(ctx)
     left_widget.showMinimized()
 
     # Запуск потоков
